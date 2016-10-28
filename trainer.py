@@ -4,7 +4,7 @@ import matcher
 from matcher import Matcher
 import coco_loader as coco
 import constants
-from constants import layer_boxes, draw_rect, classes, image_size, batch_size, center2cornerbox, corner2centerbox
+from constants import layer_boxes, draw_rect, classes, image_size, batch_size, center2cornerbox, corner2centerbox, calc_jaccard
 import numpy as np
 import tf_common as tfc
 import cv2
@@ -45,7 +45,7 @@ def init_indices2index(out_shapes):
 
 def prepare_feed(matches, out_shapes, total_boxes, defaults):
     positives_list = []
-    posandnegs_list = []
+    negatives_list = []
     true_labels_list = []
     true_locs_list = []
 
@@ -57,30 +57,30 @@ def prepare_feed(matches, out_shapes, total_boxes, defaults):
 
                     if isinstance(match, tuple):
                         positives_list.append(1)
-                        posandnegs_list.append(1)
+                        negatives_list.append(0)
                         true_labels_list.append(match[1]) #id
                         default = defaults[o][x][y][i]
                         true_locs_list.append(calc_offsets(default, corner2centerbox(match[0])))
                     elif match == -1:
                         positives_list.append(0)
-                        posandnegs_list.append(1)
+                        negatives_list.append(1)
                         true_labels_list.append(classes - 1) # background class
                         true_locs_list.append([0]*4)
                     else:
                         positives_list.append(0)
-                        posandnegs_list.append(0)
+                        negatives_list.append(0)
                         true_labels_list.append(classes - 1)  # background class
                         true_locs_list.append([0]*4)
 
     re_positives = np.asarray(positives_list)
-    re_posandnegs = np.asarray(posandnegs_list)
+    re_negatives = np.asarray(negatives_list)
     re_true_labels = np.asarray(true_labels_list)
     re_true_locs = np.asarray(true_locs_list)
 
-    return re_positives, re_posandnegs, re_true_labels, re_true_locs
+    return re_positives, re_negatives, re_true_labels, re_true_locs
 
 def draw_matches(I, out_shapes, boxes, matches, anns):
-    I = np.copy(I)
+    I = np.copy(I) * 255.0
 
     for o in range(len(layer_boxes)):
         for y in range(out_shapes[o][2]):
@@ -110,15 +110,15 @@ def draw_matches(I, out_shapes, boxes, matches, anns):
     cv2.imshow("matches", I)
     cv2.waitKey(1)
 
-def draw_matches2(I, pos, posandneg, true_labels, true_locs, pred_locs, defaults):
-    I = np.copy(I)
+def draw_matches2(I, pos, neg, true_labels, true_locs, pred_locs, defaults):
+    I = np.copy(I) * 255.0
     index = 0
 
     for o in range(len(layer_boxes)):
-        for y in range(constants.out_shapes[o][2]):
-            for x in range(constants.out_shapes[o][1]):
+        for y in range(constants.layer_shapes[o][2]):
+            for x in range(constants.layer_shapes[o][1]):
                 for i in range(layer_boxes[o]):
-                    if posandneg[index] > 0 and sum(abs(pred_locs[index])) < 100:
+                    if sum(abs(pred_locs[index])) < 100:
                         if pos[index] > 0:
                             d = defaults[o][x][y][i]
                             coords = default2global(d, true_locs[index])
@@ -128,7 +128,7 @@ def draw_matches2(I, pos, posandneg, true_labels, true_locs, pred_locs, defaults
                             cv2.putText(I, coco.i2name[true_labels[index]],
                                         (int(coords[0] * image_size), int((coords[1] + coords[3]) * image_size)),
                                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
-                        else:
+                        elif neg[index] > 0:
                             pass
                             #d = defaults[o][x][y][i]
                             #coords = default2global(d, pred_locs[index])
@@ -143,21 +143,50 @@ def draw_matches2(I, pos, posandneg, true_labels, true_locs, pred_locs, defaults
     cv2.imshow("matches2", I)
     cv2.waitKey(1)
 
-def draw_outputs(I, boxes, confidences):
-    I = np.copy(I)
+def basic_nms(boxes, confidences, thres=0.45):
+    re = []
+
+    def pass_nms(c, lab):
+        for box_, conf_, top_label_ in re:
+            if lab == top_label_ and calc_jaccard(c, boxes[box_[0]][box_[1]][box_[2]][box_[3]]) > thres:
+                return False
+        return True
 
     for box, conf, top_label in confidences:
-        print("%f: %s %s" % (conf, coco.i2name[top_label], box))
-        if conf >= 0.1:
-            if top_label != classes-1:
-                coords = boxes[box[0]][box[1]][box[2]][box[3]]
-                coords = center2cornerbox(coords)
-                print(coords)
+        coords = boxes[box[0]][box[1]][box[2]][box[3]]
 
-                if abs(sum(coords)) < 100:
-                    draw_rect(I, coords, (0, 0, 255))
-                    cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
-                                                            int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255))
+        if top_label != classes-1 and pass_nms(coords, top_label):
+            re.append((box, conf, top_label))
+
+            if len(re) >= 200:
+                break
+
+    return re
+
+def draw_outputs(I, boxes, confidences):
+    I = np.copy(I) * 255.0
+
+    filtered = []
+
+    for box, conf, top_label in confidences:
+        if conf >= 0.01:
+            filtered.append((box, conf, top_label))
+        else:
+            break
+
+    confidences = basic_nms(boxes, filtered)
+
+    for box, conf, top_label in confidences:
+        if top_label != classes-1:
+            print("%f: %s %s" % (conf, coco.i2name[top_label], box))
+            coords = boxes[box[0]][box[1]][box[2]][box[3]]
+            coords = center2cornerbox(coords)
+            print(coords)
+
+            if abs(sum(coords)) < 100:
+                draw_rect(I, coords, (0, 0, 255))
+                cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
+                                                        int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
         else: # confidences sorted
             break
 
@@ -170,10 +199,10 @@ def start_train():
         config=tf.ConfigProto(gpu_options=(tf.GPUOptions(per_process_gpu_memory_fraction=0.7))))
     imgs_ph, bn, output_tensors, pred_labels, pred_locs = model.model(sess)
     total_boxes = pred_labels.get_shape().as_list()[1]
-    positives_ph, posandnegs_ph, true_labels_ph, true_locs_ph, total_loss, class_loss, loc_loss =\
+    positives_ph, negatives_ph, true_labels_ph, true_locs_ph, total_loss, class_loss, loc_loss =\
         model.loss(pred_labels, pred_locs, total_boxes)
     out_shapes = [out.get_shape().as_list() for out in output_tensors]
-    constants.out_shapes = out_shapes
+    constants.layer_shapes = out_shapes
     constants.indices2index = init_indices2index(out_shapes)
 
     defaults = model.default_boxes(out_shapes)
@@ -185,7 +214,7 @@ def start_train():
     with tf.variable_scope("optimizer"):
         global_step = tf.Variable(0)
 
-        optimizer = tf.train.MomentumOptimizer(1e-3, 0.99).minimize(total_loss, global_step=global_step)
+        optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss, global_step=global_step)
     new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
     sess.run(tf.initialize_variables(new_vars))
 
@@ -200,35 +229,34 @@ def start_train():
     while True:
         batch = batches.next()
 
-        imgs, anns = coco.prepare_batch(batch)
+        imgs, anns = coco.preprocess_batch(batch)
 
         pred_labels_f, pred_locs_f = sess.run([pred_labels, pred_locs], feed_dict={imgs_ph: imgs, bn: False})
-        imgs *= 255.0
 
         batch_values = []
 
         for batch_i in range(batch_size):
             boxes, matches = box_matcher.match_boxes(pred_labels_f[batch_i], pred_locs_f[batch_i], anns, batch_i)
 
-            positives_f, posandnegs_f, true_labels_f, true_locs_f = prepare_feed(matches, out_shapes, total_boxes, defaults)
-            batch_values.append((positives_f, posandnegs_f, true_labels_f, true_locs_f))
+            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches, out_shapes, total_boxes, defaults)
+            batch_values.append((positives_f, negatives_f, true_labels_f, true_locs_f))
 
             if batch_i == 0:
                 b_, c_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i], out_shapes, defaults, batch_i)
                 draw_outputs(imgs[batch_i], b_, c_)
                 draw_matches(imgs[batch_i], out_shapes, boxes, matches, anns[batch_i])
-                draw_matches2(imgs[batch_i], positives_f, posandnegs_f, true_labels_f, true_locs_f, pred_locs_f[batch_i], defaults)
+                draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i], defaults)
 
-        positives_f, posandnegs_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
+        positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
-        print(positives_f.shape)
-        print(posandnegs_f.shape)
-        print(true_labels_f.shape)
-        print(pred_labels_f.shape)
-        print(true_locs_f.shape)
-        print(pred_locs_f.shape)
+        #print(positives_f.shape)
+        #print(negatives_f.shape)
+        #print(true_labels_f.shape)
+        #print(pred_labels_f.shape)
+        #print(true_locs_f.shape)
+        #print(pred_locs_f.shape)
 
-        _, loss_f, step = sess.run([optimizer, total_loss, global_step], feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, posandnegs_ph:posandnegs_f,
+        _, loss_f, step = sess.run([optimizer, total_loss, global_step], feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
                                            true_labels_ph:true_labels_f, true_locs_ph:true_locs_f})
 
         print("%i: %f" % (step, loss_f))

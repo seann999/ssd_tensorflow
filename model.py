@@ -2,16 +2,11 @@ import numpy as np
 import tensorflow as tf
 import cv2
 import vgg.ssd_base as vgg16
-import vgg.utils as utils
 import tf_common as tfc
 import coco_loader as coco
-from constants import image_size, layer_boxes, classes, draw_rect
+from constants import image_size, layer_boxes, classes
+from ssd_common import draw_rect
 from matcher import Matcher
-
-ratios = [1.0, 1.0, 2.0, 3.0, 0.5, 1.0/3.0]
-conv4_3_ratios = [1.0, 0.5, 2.0]
-conv4_3_box_scale = 0.07
-box_s_min = 0.1
 
 def model(sess):
     images = tf.placeholder("float", [None, image_size, image_size, 3])
@@ -82,16 +77,18 @@ def loss(pred_labels, pred_locs, total_boxes):
     # true_labels = (batches x boxes)
     # pred_locs = (batches x boxes x 4)
     positives = tf.placeholder(tf.float32, [None, total_boxes])
-    posandnegs = tf.placeholder(tf.float32, [None, total_boxes])
+    negatives = tf.placeholder(tf.float32, [None, total_boxes])
     true_labels = tf.placeholder(tf.int32, [None, total_boxes])
     true_locs = tf.placeholder(tf.float32, [None, total_boxes, 4])
+
+    posandnegs = positives + negatives
 
     class_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(pred_labels, true_labels) * posandnegs
     loc_loss = tf.reduce_sum(smooth_l1(pred_locs - true_locs), reduction_indices=2) * positives # smooth l1
     total_loss = tf.reduce_mean(tf.reduce_sum(class_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(posandnegs, reduction_indices=1))\
                  + 1.0 * tf.reduce_sum(loc_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(positives, reduction_indices=1)))
 
-    return positives, posandnegs, true_labels, true_locs, total_loss, class_loss, loc_loss
+    return positives, negatives, true_labels, true_locs, total_loss, class_loss, loc_loss
 
 def box_scale(k):
     s_min = box_s_min
@@ -160,7 +157,7 @@ if __name__ == "__main__":
     batches = coco.create_batches(8, shuffle=True)
 
     for batch in batches:
-        imgs, anns = coco.prepare_batch(batch)
+        imgs, anns = coco.preprocess_batch(batch)
         out = sess.run(outputs, feed_dict={imgs_ph: imgs, bn: True})
         imgs *= 255.0
 

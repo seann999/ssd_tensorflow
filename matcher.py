@@ -1,30 +1,6 @@
-from constants import layer_boxes, classes, center2cornerbox
+from constants import layer_boxes, classes
+from ssd_common import center2cornerbox, calc_jaccard
 import numpy as np
-
-def calc_intersection(r1, r2):
-    left = max(r1[0], r2[0])
-    right = min(r1[0] + r1[2], r2[0] + r2[2])
-    bottom = min(r1[1] + r1[3], r2[1] + r2[3])
-    top = max(r1[1], r2[1])
-
-    if left < right and top < bottom:
-        return (right - left) * (bottom - top)
-
-    return 0
-
-
-def calc_jaccard(r1, r2):
-    r1_ = [r1[0], r1[1], max(r1[2], 0), max(r1[3], 0)]
-    r2_ = [r2[0], r2[1], max(r2[2], 0), max(r2[3], 0)]
-    intersection = calc_intersection(r1_, r2_)
-    union = r1_[2] * r1_[3] + r2_[2] * r2_[3] - intersection
-
-    if union <= 0:
-        return 0
-
-    j = intersection / union
-
-    return j
 
 def format_output(pred_labels, pred_locs, out_shapes, defaults, batch_index):
     boxes = [
@@ -65,7 +41,7 @@ class Matcher:
     def match_boxes(self, pred_labels, pred_locs, anns, batch_index):
         boxes, sorted_confidences = format_output(pred_labels, pred_locs, self.out_shapes, self.defaults, batch_index)
 
-        matches = [[[[None for i in range(layer_boxes[o])] for y in range(self.out_shapes[o][2])] for x in range(self.out_shapes[o][1])]
+        matches = [[[[None for i in range(layer_boxes[o])] for x in range(self.out_shapes[o][1])] for y in range(self.out_shapes[o][2])]
                  for o in range(len(layer_boxes))]
 
         positive_count = 0
@@ -95,7 +71,6 @@ class Matcher:
 
             matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] = sorted_jaccs[0][2]
 
-        print("annotations: %i" % len(anns[batch_index]))
         print("positives: %i" % positive_count)
         negative_max = positive_count * 3
         negative_count = 0
@@ -104,7 +79,7 @@ class Matcher:
             if negative_count >= negative_max:
                 break
 
-            if matches[box[0]][box[1]][box[2]][box[3]] == None and top_label != classes-1: # if not background class
+            if matches[box[0]][box[1]][box[2]][box[3]] == None and top_label != classes-1:  # if not background class
                 matches[box[0]][box[1]][box[2]][box[3]] = -1
                 negative_count += 1
 
