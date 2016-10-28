@@ -4,7 +4,8 @@ import matcher
 from matcher import Matcher
 import coco_loader as coco
 import constants
-from constants import layer_boxes, draw_rect, classes, image_size, batch_size, center2cornerbox, corner2centerbox, calc_jaccard
+from constants import *
+from ssd_common import *
 import numpy as np
 import tf_common as tfc
 import cv2
@@ -12,36 +13,19 @@ import cv2
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
-np.set_printoptions(threshold=np.nan)
-
 def default2global(default, offsets):
-    cX = default[0] + offsets[0]
-    cY = default[1] + offsets[1]
+    c_x = default[0] + offsets[0]
+    c_y = default[1] + offsets[1]
     w = default[2] + offsets[2]
     h = default[3] + offsets[3]
 
-    return [cX - w/2.0, cY - h/2.0, w, h]
+    return [c_x - w/2.0, c_y - h/2.0, w, h]
 
 def calc_offsets(default, truth):
     return [truth[0] - default[0],
             truth[1] - default[1],
             truth[2] - default[2],
             truth[3] - default[3]]
-
-def init_indices2index(out_shapes):
-    index = 0
-    indices = [[[[None for i in range(layer_boxes[o])] for y in range(out_shapes[o][2])] for x in
-                range(out_shapes[o][1])]
-               for o in range(len(layer_boxes))]
-
-    for o in range(len(layer_boxes)):
-        for y in range(out_shapes[o][2]):
-            for x in range(out_shapes[o][1]):
-                for i in range(layer_boxes[o]):
-                    indices[o][y][x][i] = index
-                    index += 1
-
-    return indices
 
 def prepare_feed(matches, out_shapes, total_boxes, defaults):
     positives_list = []
@@ -55,29 +39,29 @@ def prepare_feed(matches, out_shapes, total_boxes, defaults):
                 for i in range(layer_boxes[o]):
                     match = matches[o][x][y][i]
 
-                    if isinstance(match, tuple):
+                    if isinstance(match, tuple): # there is a ground truth assigned to this default box
                         positives_list.append(1)
                         negatives_list.append(0)
                         true_labels_list.append(match[1]) #id
                         default = defaults[o][x][y][i]
                         true_locs_list.append(calc_offsets(default, corner2centerbox(match[0])))
-                    elif match == -1:
+                    elif match == -1: # this default box was chosen to be a negative
                         positives_list.append(0)
                         negatives_list.append(1)
-                        true_labels_list.append(classes - 1) # background class
+                        true_labels_list.append(classes) # background class
                         true_locs_list.append([0]*4)
-                    else:
+                    else: # no influence for this training step
                         positives_list.append(0)
                         negatives_list.append(0)
-                        true_labels_list.append(classes - 1)  # background class
+                        true_labels_list.append(classes)  # background class
                         true_locs_list.append([0]*4)
 
-    re_positives = np.asarray(positives_list)
-    re_negatives = np.asarray(negatives_list)
-    re_true_labels = np.asarray(true_labels_list)
-    re_true_locs = np.asarray(true_locs_list)
+    a_positives = np.asarray(positives_list)
+    a_negatives = np.asarray(negatives_list)
+    a_true_labels = np.asarray(true_labels_list)
+    a_true_locs = np.asarray(true_locs_list)
 
-    return re_positives, re_negatives, re_true_labels, re_true_locs
+    return a_positives, a_negatives, a_true_labels, a_true_locs
 
 def draw_matches(I, out_shapes, boxes, matches, anns):
     I = np.copy(I) * 255.0
@@ -86,24 +70,24 @@ def draw_matches(I, out_shapes, boxes, matches, anns):
         for y in range(out_shapes[o][2]):
             for x in range(out_shapes[o][1]):
                 for i in range(layer_boxes[o]):
-                    s = matches[o][x][y][i]
+                    match = matches[o][x][y][i]
 
                     # None if not positive nor negative
                     # -1 if negative
                     # ground truth indices if positive
 
-                    if s == -1:
+                    if match == -1:
                         coords = center2cornerbox(boxes[o][x][y][i])
                         draw_rect(I, coords, (255, 0, 0))
-                    elif isinstance(s, tuple):
+                    elif isinstance(match, tuple):
                         coords = center2cornerbox(boxes[o][x][y][i])
                         draw_rect(I, coords, (0, 0, 255))
                         # elif s == 2:
                         #    draw_rect(I, boxes[o][x][y][i], (0, 0, 255), 2)
 
-    for gtbox, id in anns:
-        draw_rect(I, gtbox, (0, 255, 0), 3)
-        cv2.putText(I, coco.i2name[id], (int(gtbox[0] * image_size), int((gtbox[1] + gtbox[3]) * image_size)),
+    for gt_box, id in anns:
+        draw_rect(I, gt_box, (0, 255, 0), 3)
+        cv2.putText(I, coco.i2name[id], (int(gt_box[0] * image_size), int((gt_box[1] + gt_box[3]) * image_size)),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0))
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
@@ -155,7 +139,7 @@ def basic_nms(boxes, confidences, thres=0.45):
     for box, conf, top_label in confidences:
         coords = boxes[box[0]][box[1]][box[2]][box[3]]
 
-        if top_label != classes-1 and pass_nms(coords, top_label):
+        if top_label != classes and pass_nms(coords, top_label):
             re.append((box, conf, top_label))
 
             if len(re) >= 200:
@@ -177,11 +161,11 @@ def draw_outputs(I, boxes, confidences):
     confidences = basic_nms(boxes, filtered)
 
     for box, conf, top_label in confidences:
-        if top_label != classes-1:
-            print("%f: %s %s" % (conf, coco.i2name[top_label], box))
+        if top_label != classes:
+            #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
             coords = boxes[box[0]][box[1]][box[2]][box[3]]
             coords = center2cornerbox(coords)
-            print(coords)
+            #print(coords)
 
             if abs(sum(coords)) < 100:
                 draw_rect(I, coords, (0, 0, 255))
@@ -203,18 +187,16 @@ def start_train():
         model.loss(pred_labels, pred_locs, total_boxes)
     out_shapes = [out.get_shape().as_list() for out in output_tensors]
     constants.layer_shapes = out_shapes
-    constants.indices2index = init_indices2index(out_shapes)
 
     defaults = model.default_boxes(out_shapes)
     box_matcher = Matcher(out_shapes, defaults)
     batches = coco.create_batches(batch_size, shuffle=True)
 
-    # variables in model are already initialized
-
+    # variables in model are already initialized, so only initialize those declared after
     with tf.variable_scope("optimizer"):
         global_step = tf.Variable(0)
 
-        optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss, global_step=global_step)
+        optimizer = tf.train.MomentumOptimizer(8e-4, 0.9).minimize(total_loss, global_step=global_step)
     new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
     sess.run(tf.initialize_variables(new_vars))
 
@@ -248,13 +230,6 @@ def start_train():
                 draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i], defaults)
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
-
-        #print(positives_f.shape)
-        #print(negatives_f.shape)
-        #print(true_labels_f.shape)
-        #print(pred_labels_f.shape)
-        #print(true_locs_f.shape)
-        #print(pred_locs_f.shape)
 
         _, loss_f, step = sess.run([optimizer, total_loss, global_step], feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
                                            true_labels_ph:true_labels_f, true_locs_ph:true_locs_f})

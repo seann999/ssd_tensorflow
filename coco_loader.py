@@ -37,7 +37,7 @@ def preprocess_batch(batch):
         w = img.shape[1]
         h = img.shape[0]
 
-        option = np.random.randint(2)
+        option = 0#np.random.randint(2)
 
         if option == 0:
             sample = img
@@ -91,7 +91,7 @@ def preprocess_batch(batch):
             if cX >= 0 and cX <= 1 and cY >= 0 and cY <= 1:
                 used_anns.append((box, id))
 
-        if random.uniform(0.0, 1.0) < 0.5:
+        if random.uniform(0.0, 1.0) < 0:#0.5:
             resized_img = np.fliplr(resized_img)
 
             for box, id in used_anns:
