@@ -1,7 +1,7 @@
 import cv2
 
 image_size = 500.0
-layer_boxes = [3, 6, 6, 6, 6, 6]
+layer_boxes = [3, 6, 6, 6, 6, 6] 
 classes = 81
 batch_size = 2
 out_shapes = None
