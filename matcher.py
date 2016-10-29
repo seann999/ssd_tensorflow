@@ -1,25 +1,28 @@
+import constants as c
 from constants import layer_boxes, classes, negposratio
+# cant import out_shapes and defaults here since its still not initialized
 from ssd_common import center2cornerbox, calc_jaccard
 import numpy as np
 
-def format_output(pred_labels, pred_locs, out_shapes, defaults, batch_index):
+def format_output(pred_labels, pred_locs, batch_index):
+
     boxes = [
-        [[[None for i in range(layer_boxes[o])] for x in range(out_shapes[o][1])] for y in range(out_shapes[o][2])]
+        [[[None for i in range(layer_boxes[o])] for x in range(c.out_shapes[o][1])] for y in range(c.out_shapes[o][2])]
         for o in range(len(layer_boxes))]
     confidences = []
     index = 0
 
     for o_i in range(len(layer_boxes)):
-        for y in range(out_shapes[o_i][2]):
-            for x in range(out_shapes[o_i][1]):
+        for y in range(c.out_shapes[o_i][2]):
+            for x in range(c.out_shapes[o_i][1]):
                 for i in range(layer_boxes[o_i]):
                     diffs = pred_locs[index]
 
-                    w = defaults[o_i][x][y][i][2] + diffs[2]
-                    h = defaults[o_i][x][y][i][3] + diffs[3]
+                    w = c.defaults[o_i][x][y][i][2] + diffs[2]
+                    h = c.defaults[o_i][x][y][i][3] + diffs[3]
 
-                    c_x = defaults[o_i][x][y][i][0] + diffs[0]
-                    c_y = defaults[o_i][x][y][i][1] + diffs[1]
+                    c_x = c.defaults[o_i][x][y][i][0] + diffs[0]
+                    c_y = c.defaults[o_i][x][y][i][1] + diffs[1]
 
                     boxes[o_i][x][y][i] = [c_x, c_y, w, h]
                     logits = pred_labels[index]
@@ -34,14 +37,13 @@ def format_output(pred_labels, pred_locs, out_shapes, defaults, batch_index):
     return boxes, sorted_confidences
 
 class Matcher:
-    def __init__(self, out_shapes, defaults):
-        self.out_shapes = out_shapes
-        self.defaults = defaults
+    def __init__(self):
+       pass
 
     def match_boxes(self, pred_labels, pred_locs, anns, batch_index):
-        boxes, sorted_confidences = format_output(pred_labels, pred_locs, self.out_shapes, self.defaults, batch_index)
+        boxes, sorted_confidences = format_output(pred_labels, pred_locs, batch_index)
 
-        matches = [[[[None for i in range(layer_boxes[o])] for x in range(self.out_shapes[o][1])] for y in range(self.out_shapes[o][2])]
+        matches = [[[[None for i in range(c.layer_boxes[o])] for x in range(c.out_shapes[o][1])] for y in range(c.out_shapes[o][2])]
                  for o in range(len(layer_boxes))]
 
         positive_count = 0
@@ -51,8 +53,8 @@ class Matcher:
             jaccs = []
 
             for o in range(len(layer_boxes)):
-                for y in range(self.out_shapes[o][2]):
-                    for x in range(self.out_shapes[o][1]):
+                for y in range(c.out_shapes[o][2]):
+                    for x in range(c.out_shapes[o][1]):
                         for i in range(layer_boxes[o]):
                             box = boxes[o][x][y][i]
                             j = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
@@ -82,6 +84,6 @@ class Matcher:
                 matches[box[0]][box[1]][box[2]][box[3]] = -1
                 negative_count += 1
 
-        print("negative: %i" % negative_count)
+        #print("negative: %i" % negative_count)
 
         return boxes, matches

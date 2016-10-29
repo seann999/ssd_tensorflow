@@ -3,11 +3,13 @@ import model
 import matcher
 from matcher import Matcher
 import coco_loader as coco
-import constants
-from constants import *
+import constants as c
+from constants import layer_boxes, classes
 from ssd_common import *
 import numpy as np
 import tf_common as tfc
+import signal
+import sys
 import cv2
 
 flags = tf.app.flags
@@ -27,15 +29,15 @@ def calc_offsets(default, truth):
             truth[2] - default[2],
             truth[3] - default[3]]
 
-def prepare_feed(matches, out_shapes, total_boxes, defaults):
+def prepare_feed(matches, total_boxes):
     positives_list = []
     negatives_list = []
     true_labels_list = []
     true_locs_list = []
 
     for o in range(len(layer_boxes)):
-        for y in range(out_shapes[o][2]):
-            for x in range(out_shapes[o][1]):
+        for y in range(c.out_shapes[o][2]):
+            for x in range(c.out_shapes[o][1]):
                 for i in range(layer_boxes[o]):
                     match = matches[o][x][y][i]
 
@@ -43,7 +45,7 @@ def prepare_feed(matches, out_shapes, total_boxes, defaults):
                         positives_list.append(1)
                         negatives_list.append(0)
                         true_labels_list.append(match[1]) #id
-                        default = defaults[o][x][y][i]
+                        default = c.defaults[o][x][y][i]
                         true_locs_list.append(calc_offsets(default, corner2centerbox(match[0])))
                     elif match == -1: # this default box was chosen to be a negative
                         positives_list.append(0)
@@ -63,12 +65,12 @@ def prepare_feed(matches, out_shapes, total_boxes, defaults):
 
     return a_positives, a_negatives, a_true_labels, a_true_locs
 
-def draw_matches(I, out_shapes, boxes, matches, anns):
+def draw_matches(I, boxes, matches, anns):
     I = np.copy(I) * 255.0
 
     for o in range(len(layer_boxes)):
-        for y in range(out_shapes[o][2]):
-            for x in range(out_shapes[o][1]):
+        for y in range(c.out_shapes[o][2]):
+            for x in range(c.out_shapes[o][1]):
                 for i in range(layer_boxes[o]):
                     match = matches[o][x][y][i]
 
@@ -94,17 +96,17 @@ def draw_matches(I, out_shapes, boxes, matches, anns):
     cv2.imshow("matches", I)
     cv2.waitKey(1)
 
-def draw_matches2(I, pos, neg, true_labels, true_locs, pred_locs, defaults):
+def draw_matches2(I, pos, neg, true_labels, true_locs, pred_locs):
     I = np.copy(I) * 255.0
     index = 0
 
     for o in range(len(layer_boxes)):
-        for y in range(constants.layer_shapes[o][2]):
-            for x in range(constants.layer_shapes[o][1]):
+        for y in range(c.out_shapes[o][2]):
+            for x in range(c.out_shapes[o][1]):
                 for i in range(layer_boxes[o]):
                     if sum(abs(pred_locs[index])) < 100:
                         if pos[index] > 0:
-                            d = defaults[o][x][y][i]
+                            d = c.defaults[o][x][y][i]
                             coords = default2global(d, true_locs[index])
                             draw_rect(I, coords, (0, 255, 0))
                             coords = default2global(d, pred_locs[index])
@@ -186,17 +188,23 @@ def start_train():
     positives_ph, negatives_ph, true_labels_ph, true_locs_ph, total_loss, class_loss, loc_loss =\
         model.loss(pred_labels, pred_locs, total_boxes)
     out_shapes = [out.get_shape().as_list() for out in output_tensors]
-    constants.layer_shapes = out_shapes
+    c.out_shapes = out_shapes
+    c.defaults = model.default_boxes(out_shapes)
+    box_matcher = Matcher()
+    batches = coco.create_batches(FLAGS.batch_size, shuffle=True)
 
-    defaults = model.default_boxes(out_shapes)
-    box_matcher = Matcher(out_shapes, defaults)
-    batches = coco.create_batches(batch_size, shuffle=True)
+    def signal_handler(signal, frame):
+        print('You pressed Ctrl+C!')
+        saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
 
     # variables in model are already initialized, so only initialize those declared after
     with tf.variable_scope("optimizer"):
         global_step = tf.Variable(0)
 
-        optimizer = tf.train.MomentumOptimizer(8e-4, 0.9).minimize(total_loss, global_step=global_step)
+        optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss, global_step=global_step)
     new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
     sess.run(tf.initialize_variables(new_vars))
 
@@ -217,17 +225,17 @@ def start_train():
 
         batch_values = []
 
-        for batch_i in range(batch_size):
+        for batch_i in range(len(batch)):
             boxes, matches = box_matcher.match_boxes(pred_labels_f[batch_i], pred_locs_f[batch_i], anns, batch_i)
 
-            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches, out_shapes, total_boxes, defaults)
+            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches, total_boxes)
             batch_values.append((positives_f, negatives_f, true_labels_f, true_locs_f))
 
             if batch_i == 0:
-                b_, c_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i], out_shapes, defaults, batch_i)
+                b_, c_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i], batch_i)
                 draw_outputs(imgs[batch_i], b_, c_)
-                draw_matches(imgs[batch_i], out_shapes, boxes, matches, anns[batch_i])
-                draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i], defaults)
+                draw_matches(imgs[batch_i], boxes, matches, anns[batch_i])
+                draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i])
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
@@ -243,5 +251,6 @@ def start_train():
 
 if __name__ == "__main__":
     flags.DEFINE_string("model_dir", "summaries/test0", "model directory")
+    flags.DEFINE_integer("batch_size", 32, "batch size")
 
     start_train()

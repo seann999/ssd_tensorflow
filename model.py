@@ -93,13 +93,13 @@ def box_scale(k):
 
     return s_k
 
-def default_boxes(layer_shapes):
+def default_boxes(out_shapes):
     boxes = []
 
-    for o_i in range(len(layer_shapes)):
+    for o_i in range(len(out_shapes)):
         layer_boxes = []
 
-        layer_shape = layer_shapes[o_i]
+        layer_shape = out_shapes[o_i]
         s_k = box_scale(o_i + 1)
         s_k1 = box_scale(o_i + 2)
 
