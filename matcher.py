@@ -58,20 +58,23 @@ class Matcher:
                         for i in range(layer_boxes[o]):
                             box = boxes[o][x][y][i]
                             j = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
-                            jaccs.append(([o, x, y, i], j, (gt_box, id)))
+                            jaccs.append(([o, x, y, i], j))
 
-            sorted_jaccs = sorted(jaccs, key=lambda tup: tup[1])[::-1]
+            #sorted_jaccs = sorted(jaccs, key=lambda tup: tup[1])[::-1]
 
-            for box, jacc, (gt_box, id) in sorted_jaccs:
+            top_match = (None, 0)
+            for box, jacc in jaccs:
                 if jacc >= 0.5:
                     matches[box[0]][box[1]][box[2]][box[3]] = (gt_box, id)
                     positive_count += 1
+                if jacc > top_match[1]:
+                    top_match = (box, jacc)
 
-            top_box = sorted_jaccs[0][0]
-            if matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] is not None:
+            top_box = top_match[0]
+            #if box's jaccard is <0.5 but is the best
+            if top_box is not None and matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] is None:
                 positive_count += 1
-
-            matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] = sorted_jaccs[0][2]
+                matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] = (gt_box, id)
 
         negative_max = positive_count * negposratio
         negative_count = 0
