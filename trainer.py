@@ -233,9 +233,10 @@ def start_train():
 
             if batch_i == 0:
                 b_, c_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i], batch_i)
-                draw_outputs(imgs[batch_i], b_, c_)
-                draw_matches(imgs[batch_i], boxes, matches, anns[batch_i])
-                draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i])
+                if FLAGS.display:
+                    draw_outputs(imgs[batch_i], b_, c_)
+                    draw_matches(imgs[batch_i], boxes, matches, anns[batch_i])
+                    draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i])
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
@@ -252,5 +253,6 @@ def start_train():
 if __name__ == "__main__":
     flags.DEFINE_string("model_dir", "summaries/test0", "model directory")
     flags.DEFINE_integer("batch_size", 32, "batch size")
+    flags.DEFINE_boolean("display", True, "display relevant windows")
 
     start_train()
