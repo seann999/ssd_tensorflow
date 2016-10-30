@@ -240,15 +240,15 @@ def start_train():
                     draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
 
         #print("matching...")
-        #threads = []
+        threads = []
         for batch_i in range(FLAGS.batch_size):
-            match_boxes(batch_i)
-            #thread = Thread(target=match_boxes, args=(batch_i,))
-            #thread.start()
-            #threads.append(thread)
+            #match_boxes(batch_i)
+            thread = Thread(target=match_boxes, args=(batch_i,))
+            thread.start()
+            threads.append(thread)
 
-        #for thread in threads:
-        #    thread.join()
+        for thread in threads:
+            thread.join()
         #print("matching all done")
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
