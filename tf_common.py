@@ -33,9 +33,9 @@ def conv2d(name, x, maps_in, maps_out, train_phase, size=3, stride=1, act=tf.nn.
     with tf.variable_scope(name):
         w = tf.get_variable(name="conv2d", shape=[size, size, maps_in, maps_out], initializer=xic())
         c = tf.nn.conv2d(x, w, strides=[1, stride, stride, 1], padding='SAME')
-        b = tf.get_variable(name="conv2d_b", shape=[maps_out], initializer=tf.constant_initializer(0))
-        #bn = batch_norm(c, train_phase)
-        bn = b + c
+        #b = tf.get_variable(name="conv2d_b", shape=[maps_out], initializer=tf.constant_initializer(0))
+        bn = batch_norm(c, train_phase)
+        #bn = b + c
 
     if act is not None:
         return act(bn, name=name)

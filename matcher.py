@@ -26,9 +26,13 @@ def format_output(pred_labels, pred_locs):
 
                     boxes[o_i][x][y][i] = [c_x, c_y, w, h]
                     logits = pred_labels[index]
-                    # indices, max probability, corresponding label
-                    confidences.append(([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)),
-                                        np.argmax(logits)))
+                    #if np.argmax(logits) != classes+1:
+                        # indices, max probability, corresponding label
+                    confidences.append(([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)), np.argmax(logits)))
+                    #else:
+                    #    logits = pred_labels[index][:-1]
+                    #    confidences.append(([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)),
+                    #                        np.argmax(logits)))
 
                     index += 1
 
@@ -45,8 +49,8 @@ def sort_confidences(pred_labels):
             for x in range(c.out_shapes[o_i][1]):
                 for i in range(layer_boxes[o_i]):
                     logits = pred_labels[index]
-                    # indices, max probability, corresponding label
-                    confidences.append(([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)),
+                    probs = np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)
+                    confidences.append(([o_i, x, y, i], np.amax(probs),
                                         np.argmax(logits)))
 
                     index += 1
@@ -70,18 +74,24 @@ class Matcher:
         for index, (gt_box, id) in zip(range(len(anns)), anns):
 
             top_match = (None, 0)
+            gt_c_x = gt_box[0] + gt_box[2]/2.0
+            gt_c_y = gt_box[1] + gt_box[3]/2.0
 
             for o in range(len(layer_boxes)):
-                for y in range(c.out_shapes[o][2]):
-                    for x in range(c.out_shapes[o][1]):
-                        for i in range(layer_boxes[o]):
-                            box = c.defaults[o][x][y][i]
-                            jacc = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
-                            if jacc >= 0.5:
-                                matches[o][x][y][i] = (gt_box, id)
-                                positive_count += 1
-                            if jacc > top_match[1]:
-                                top_match = ([o, x, y, i], jacc)
+                #for y in range(c.out_shapes[o][2]):
+                    #for x in range(c.out_shapes[o][1]):
+
+                x = int(gt_c_x / (1.0 / c.out_shapes[o][2]))
+                y = int(gt_c_y / (1.0 / c.out_shapes[o][1]))
+
+                for i in range(layer_boxes[o]):
+                    box = c.defaults[o][x][y][i]
+                    jacc = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
+                    if jacc >= 0.5:
+                        matches[o][x][y][i] = (gt_box, id)
+                        positive_count += 1
+                    if jacc > top_match[1]:
+                        top_match = ([o, x, y, i], jacc)
 
             top_box = top_match[0]
             #if box's jaccard is <0.5 but is the best
@@ -96,8 +106,11 @@ class Matcher:
             if negative_count >= negative_max:
                 break
 
-            if matches[box[0]][box[1]][box[2]][box[3]] == None and top_label != classes:  # if not background class
+            if matches[box[0]][box[1]][box[2]][box[3]] is None and top_label != classes:
                 matches[box[0]][box[1]][box[2]][box[3]] = -1
                 negative_count += 1
+
+        print("%i positives" % positive_count)
+        print("%i/%i negatives" % (negative_count, negative_max))
 
         return matches

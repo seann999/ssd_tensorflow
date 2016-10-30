@@ -16,7 +16,7 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 from threading import Thread
 
-def default2global(default, offsets):
+def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
     c_y = default[1] + offsets[1]
     w = default[2] + offsets[2]
@@ -30,7 +30,7 @@ def calc_offsets(default, truth):
             truth[2] - default[2],
             truth[3] - default[3]]
 
-def prepare_feed(matches, total_boxes):
+def prepare_feed(matches):
     positives_list = []
     negatives_list = []
     true_labels_list = []
@@ -107,7 +107,7 @@ def draw_matches2(I, pos, neg, true_labels, true_locs):
                 for i in range(layer_boxes[o]):
                     if pos[index] > 0:
                         d = c.defaults[o][x][y][i]
-                        coords = center2cornerbox(default2global(d, true_locs[index]))
+                        coords = default2cornerbox(d, true_locs[index])
                         draw_rect(I, coords, (0, 255, 0))
                         coords = center2cornerbox(d)
                         draw_rect(I, coords, (0, 0, 255))
@@ -168,7 +168,7 @@ def draw_outputs(I, boxes, confidences):
             coords = boxes[box[0]][box[1]][box[2]][box[3]]
             coords = center2cornerbox(coords)
 
-            draw_rect(I, coords, (0, 0, 255), int(conf*10.0+1.0))
+            draw_rect(I, coords, (0, 0, 255), int(conf*5.0+1.0))
             cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
                                                     int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
         else: # confidences sorted
@@ -203,7 +203,7 @@ def start_train():
         global_step = tf.Variable(0)
         lr_ph = tf.placeholder(tf.float32, shape=[])
 
-        optimizer = tf.train.MomentumOptimizer(lr_ph, 0.9).minimize(total_loss, global_step=global_step)
+        optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss, global_step=global_step)
     new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
     sess.run(tf.initialize_variables(new_vars))
 
@@ -228,7 +228,7 @@ def start_train():
         def match_boxes(batch_i):
             matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
 
-            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches, total_boxes)
+            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
 
             batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
 
@@ -239,18 +239,26 @@ def start_train():
                     draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
                     draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
 
-        print("matching...")
-        threads = []
+        #print("matching...")
+        #threads = []
         for batch_i in range(FLAGS.batch_size):
-            thread = Thread(target=match_boxes, args=(batch_i,))
-            thread.start()
-            threads.append(thread)
+            match_boxes(batch_i)
+            #thread = Thread(target=match_boxes, args=(batch_i,))
+            #thread.start()
+            #threads.append(thread)
 
-        for thread in threads:
-            thread.join()
-        print("matching all done")
+        #for thread in threads:
+        #    thread.join()
+        #print("matching all done")
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
+
+        for i in range(FLAGS.batch_size):
+            if np.sum(positives_f, axis=1)[i] >= 2:
+                np.set_printoptions(threshold=np.nan)
+                #print(true_locs_f[i][positives_f[0] == 1][:2])
+                #print(pred_locs_f[i][positives_f[0] == 1][:2])
+                #print(pred_locs_f[i][:100])
 
         if step < 4000:
             lr = 8e-4

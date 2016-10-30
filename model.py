@@ -78,12 +78,12 @@ def loss(pred_labels, pred_locs, total_boxes):
     posandnegs = positives + negatives
 
     class_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(pred_labels, true_labels) * posandnegs
-    class_loss = tf.reduce_mean(tf.reduce_sum(class_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(posandnegs, reduction_indices=1)))
+    class_loss = tf.reduce_sum(class_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(posandnegs, reduction_indices=1))
     loc_loss = tf.reduce_sum(smooth_l1(pred_locs - true_locs), reduction_indices=2) * positives
-    loc_loss = tf.reduce_mean(tf.reduce_sum(loc_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(positives, reduction_indices=1)))
-    total_loss = class_loss + 1.0 * loc_loss
+    loc_loss = tf.reduce_sum(loc_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(positives, reduction_indices=1))
+    total_loss = tf.reduce_mean(class_loss + 1.0 * loc_loss)
 
-    return positives, negatives, true_labels, true_locs, total_loss, class_loss, loc_loss
+    return positives, negatives, true_labels, true_locs, total_loss, tf.reduce_mean(class_loss), tf.reduce_mean(loc_loss)
 
 def box_scale(k):
     s_min = box_s_min
