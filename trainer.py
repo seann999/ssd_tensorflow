@@ -242,6 +242,7 @@ def start_train():
                     draw_matches(imgs[batch_i], boxes, matches, anns[batch_i])
                     draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i])
 
+        print("matching...")
         threads = []
         for batch_i in range(FLAGS.batch_size):
             thread = Thread(target=match_boxes, args=(batch_i,))
