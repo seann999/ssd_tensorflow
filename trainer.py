@@ -170,7 +170,7 @@ def draw_outputs(I, boxes, confidences):
             #print(coords)
 
             if abs(sum(coords)) < 100:
-                draw_rect(I, coords, (0, 0, 255))
+                draw_rect(I, coords, (0, 0, 255), int(conf*10.0+1.0))
                 cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
                                                         int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
         else: # confidences sorted
@@ -203,8 +203,9 @@ def start_train():
     # variables in model are already initialized, so only initialize those declared after
     with tf.variable_scope("optimizer"):
         global_step = tf.Variable(0)
+        lr_ph = tf.placeholder(tf.float32, shape=[])
 
-        optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss, global_step=global_step)
+        optimizer = tf.train.MomentumOptimizer(lr_ph, 0.9).minimize(total_loss, global_step=global_step)
     new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
     sess.run(tf.initialize_variables(new_vars))
 
@@ -221,7 +222,7 @@ def start_train():
 
         imgs, anns = coco.preprocess_batch(batch)
 
-        pred_labels_f, pred_locs_f = sess.run([pred_labels, pred_locs], feed_dict={imgs_ph: imgs, bn: False})
+        pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
 
         batch_values = []
 
@@ -240,12 +241,24 @@ def start_train():
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
-        _, loss_f, step = sess.run([optimizer, total_loss, global_step], feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
-                                           true_labels_ph:true_labels_f, true_locs_ph:true_locs_f})
+        if step < 4000:
+            lr = 8e-4
+        elif step < 180000:
+            lr = 1e-3
+        elif step < 240000:
+            lr = 1e-4
+        else:
+            lr = 1e-5
+
+        _, c_loss_f, l_loss_f, loss_f, step = sess.run([optimizer, class_loss, loc_loss, total_loss, global_step],
+                                   feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
+                                           true_labels_ph:true_labels_f, true_locs_ph:true_locs_f, lr_ph:lr})
 
         print("%i: %f" % (step, loss_f))
 
         tfc.summary_float(step, "loss", loss_f, summary_writer)
+        tfc.summary_float(step, "class loss", c_loss_f, summary_writer)
+        tfc.summary_float(step, "loc loss", l_loss_f, summary_writer)
 
         if step % 100 == 0:
             saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)

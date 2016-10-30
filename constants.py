@@ -1,5 +1,4 @@
-# these values are for MS COCO
-image_size = 500.0
+image_size = 300.0
 layer_boxes = [3, 6, 6, 6, 6, 6] 
 classes = 80
 box_ratios = [1.0, 1.0, 2.0, 3.0, 0.5, 1.0/3.0]
