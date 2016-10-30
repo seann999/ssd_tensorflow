@@ -104,7 +104,7 @@ def preprocess_batch(batch):
 
 def create_batches(batch_size, shuffle=True):
     # 1 batch = [(image, [([x, y, w, h], id), ([x, y, w, h], id), ...]), ...]
-    batches = []
+    batch = []
 
     while True:
         indices = range(len(img_ids))
@@ -128,11 +128,17 @@ def create_batches(batch_size, shuffle=True):
                 bb = [f for f in ann["bbox"]]
                 ann_list.append((bb, id2i[ann["category_id"]]))
 
-            batches.append((I, ann_list))
+            batch.append((I, ann_list))
 
-            if len(batches) >= batch_size:
-                yield batches
-                batches = []
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+def create_preprocessed_batches(batch_size, shuffle=True):
+    batches = create_batches(batch_size, shuffle)
+    while True:
+        batch = batches.next()
+        yield preprocess_batch(batch)
 
 if __name__ == "__main__":
     batch = create_batches(1, shuffle=False)

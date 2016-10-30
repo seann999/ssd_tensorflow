@@ -50,25 +50,19 @@ class Matcher:
 
         for index, (gt_box, id) in zip(range(len(anns[batch_index])), anns[batch_index]):
 
-            jaccs = []
+            top_match = (None, 0)
 
             for o in range(len(layer_boxes)):
                 for y in range(c.out_shapes[o][2]):
                     for x in range(c.out_shapes[o][1]):
                         for i in range(layer_boxes[o]):
                             box = boxes[o][x][y][i]
-                            j = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
-                            jaccs.append(([o, x, y, i], j))
-
-            #sorted_jaccs = sorted(jaccs, key=lambda tup: tup[1])[::-1]
-
-            top_match = (None, 0)
-            for box, jacc in jaccs:
-                if jacc >= 0.5:
-                    matches[box[0]][box[1]][box[2]][box[3]] = (gt_box, id)
-                    positive_count += 1
-                if jacc > top_match[1]:
-                    top_match = (box, jacc)
+                            jacc = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
+                            if jacc >= 0.5:
+                                matches[o][x][y][i] = (gt_box, id)
+                                positive_count += 1
+                            if jacc > top_match[1]:
+                                top_match = ([o, x, y, i], jacc)
 
             top_box = top_match[0]
             #if box's jaccard is <0.5 but is the best

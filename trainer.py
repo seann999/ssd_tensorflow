@@ -14,6 +14,7 @@ import cv2
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
+from threading import Thread
 
 def default2global(default, offsets):
     c_x = default[0] + offsets[0]
@@ -218,19 +219,21 @@ def start_train():
         print("restored %s" % ckpt.model_checkpoint_path)
 
     while True:
+        print("new batch")
         batch = batches.next()
-
+        print("preprocessing")
         imgs, anns = coco.preprocess_batch(batch)
-
+        print("retrieving outputs")
         pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
 
-        batch_values = []
+        batch_values = [None for i in range(FLAGS.batch_size)]
 
-        for batch_i in range(len(batch)):
+        def match_boxes(batch_i):
             boxes, matches = box_matcher.match_boxes(pred_labels_f[batch_i], pred_locs_f[batch_i], anns, batch_i)
 
             positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches, total_boxes)
-            batch_values.append((positives_f, negatives_f, true_labels_f, true_locs_f))
+
+            batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
 
             if batch_i == 0:
                 b_, c_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i], batch_i)
@@ -238,6 +241,16 @@ def start_train():
                     draw_outputs(imgs[batch_i], b_, c_)
                     draw_matches(imgs[batch_i], boxes, matches, anns[batch_i])
                     draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i])
+
+        threads = []
+        for batch_i in range(FLAGS.batch_size):
+            thread = Thread(target=match_boxes, args=(batch_i,))
+            thread.start()
+            threads.append(thread)
+
+        for thread in threads:
+            thread.join()
+        print("matching all done")
 
         positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
@@ -250,6 +263,7 @@ def start_train():
         else:
             lr = 1e-5
 
+        print("training")
         _, c_loss_f, l_loss_f, loss_f, step = sess.run([optimizer, class_loss, loc_loss, total_loss, global_step],
                                    feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
                                            true_labels_ph:true_labels_f, true_locs_ph:true_locs_f, lr_ph:lr})
