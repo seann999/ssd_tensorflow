@@ -97,7 +97,7 @@ def draw_matches(I, boxes, matches, anns):
     cv2.imshow("matches", I)
     cv2.waitKey(1)
 
-def draw_matches2(I, pos, neg, true_labels, true_locs, pred_locs):
+def draw_matches2(I, pos, neg, true_labels, true_locs):
     I = np.copy(I) * 255.0
     index = 0
 
@@ -105,24 +105,23 @@ def draw_matches2(I, pos, neg, true_labels, true_locs, pred_locs):
         for y in range(c.out_shapes[o][2]):
             for x in range(c.out_shapes[o][1]):
                 for i in range(layer_boxes[o]):
-                    if sum(abs(pred_locs[index])) < 100:
-                        if pos[index] > 0:
-                            d = c.defaults[o][x][y][i]
-                            coords = default2global(d, true_locs[index])
-                            draw_rect(I, coords, (0, 255, 0))
-                            coords = default2global(d, pred_locs[index])
-                            draw_rect(I, coords, (0, 0, 255))
-                            cv2.putText(I, coco.i2name[true_labels[index]],
-                                        (int(coords[0] * image_size), int((coords[1] + coords[3]) * image_size)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
-                        elif neg[index] > 0:
-                            pass
-                            #d = defaults[o][x][y][i]
-                            #coords = default2global(d, pred_locs[index])
-                            #draw_rect(I, coords, (255, 0, 0))
-                            #cv2.putText(I, coco.i2name[true_labels[index]],
-                            #            (int(coords[0] * image_size), int((coords[1] + coords[3]) * image_size)),
-                            #            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0))
+                    if pos[index] > 0:
+                        d = c.defaults[o][x][y][i]
+                        coords = center2cornerbox(default2global(d, true_locs[index]))
+                        draw_rect(I, coords, (0, 255, 0))
+                        coords = center2cornerbox(d)
+                        draw_rect(I, coords, (0, 0, 255))
+                        cv2.putText(I, coco.i2name[true_labels[index]],
+                                    (int(coords[0] * image_size), int((coords[1] + coords[3]) * image_size)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
+                    elif neg[index] > 0:
+                        pass
+                        #d = defaults[o][x][y][i]
+                        #coords = default2global(d, pred_locs[index])
+                        #draw_rect(I, coords, (255, 0, 0))
+                        #cv2.putText(I, coco.i2name[true_labels[index]],
+                        #            (int(coords[0] * image_size), int((coords[1] + coords[3]) * image_size)),
+                        #            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0))
 
                     index += 1
 
@@ -168,12 +167,10 @@ def draw_outputs(I, boxes, confidences):
             #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
             coords = boxes[box[0]][box[1]][box[2]][box[3]]
             coords = center2cornerbox(coords)
-            #print(coords)
 
-            if abs(sum(coords)) < 100:
-                draw_rect(I, coords, (0, 0, 255), int(conf*10.0+1.0))
-                cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
-                                                        int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
+            draw_rect(I, coords, (0, 0, 255), int(conf*10.0+1.0))
+            cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
+                                                    int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
         else: # confidences sorted
             break
 
@@ -229,18 +226,18 @@ def start_train():
         batch_values = [None for i in range(FLAGS.batch_size)]
 
         def match_boxes(batch_i):
-            boxes, matches = box_matcher.match_boxes(pred_labels_f[batch_i], pred_locs_f[batch_i], anns, batch_i)
+            matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
 
             positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches, total_boxes)
 
             batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
 
             if batch_i == 0:
-                b_, c_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i], batch_i)
+                boxes_, confidences_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i])
                 if FLAGS.display:
-                    draw_outputs(imgs[batch_i], b_, c_)
-                    draw_matches(imgs[batch_i], boxes, matches, anns[batch_i])
-                    draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f, pred_locs_f[batch_i])
+                    draw_outputs(imgs[batch_i], boxes_, confidences_)
+                    draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
+                    draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
 
         print("matching...")
         threads = []
