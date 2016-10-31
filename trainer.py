@@ -129,7 +129,7 @@ def draw_matches2(I, pos, neg, true_labels, true_locs):
     cv2.imshow("matches2", I)
     cv2.waitKey(1)
 
-def basic_nms(boxes, confidences, thres=0.45):
+def basic_nms(boxes, confidences, thres=0.00):
     re = []
 
     def pass_nms(c, lab):
@@ -149,7 +149,7 @@ def basic_nms(boxes, confidences, thres=0.45):
 
     return re
 
-def draw_outputs(I, boxes, confidences):
+def draw_outputs(I, boxes, confidences, wait=1):
     I = np.copy(I) * 255.0
 
     filtered = []
@@ -176,9 +176,9 @@ def draw_outputs(I, boxes, confidences):
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imshow("outputs", I)
-    cv2.waitKey(1)
+    cv2.waitKey(wait)
 
-def start_train():
+def start_train(train=True):
     sess = tf.Session(
         config=tf.ConfigProto(gpu_options=(tf.GPUOptions(per_process_gpu_memory_fraction=0.7))))
     imgs_ph, bn, output_tensors, pred_labels, pred_locs = model.model(sess)
@@ -215,77 +215,89 @@ def start_train():
         saver.restore(sess, ckpt.model_checkpoint_path)
         print("restored %s" % ckpt.model_checkpoint_path)
 
-    while True:
-        print("new batch")
-        batch = batches.next()
-        print("preprocessing")
-        imgs, anns = coco.preprocess_batch(batch)
-        print("retrieving outputs")
-        pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
+    if train:
+        while True:
+            print("new batch")
+            batch = batches.next()
+            print("preprocessing")
+            imgs, anns = coco.preprocess_batch(batch)
+            print("retrieving outputs")
+            pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
 
-        batch_values = [None for i in range(FLAGS.batch_size)]
+            batch_values = [None for i in range(FLAGS.batch_size)]
 
-        def match_boxes(batch_i):
-            matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
+            def match_boxes(batch_i):
+                matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
 
-            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
+                positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
 
-            batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
+                batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
 
-            if batch_i == 0:
-                boxes_, confidences_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i])
-                if FLAGS.display:
-                    draw_outputs(imgs[batch_i], boxes_, confidences_)
-                    draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
-                    draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
+                if batch_i == 0:
+                    boxes_, confidences_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i])
+                    if FLAGS.display:
+                        draw_outputs(imgs[batch_i], boxes_, confidences_)
+                        draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
+                        draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
 
-        #print("matching...")
-        threads = []
-        for batch_i in range(FLAGS.batch_size):
-            #match_boxes(batch_i)
-            thread = Thread(target=match_boxes, args=(batch_i,))
-            thread.start()
-            threads.append(thread)
+            #print("matching...")
+            threads = []
+            for batch_i in range(FLAGS.batch_size):
+                #match_boxes(batch_i)
+                thread = Thread(target=match_boxes, args=(batch_i,))
+                thread.start()
+                threads.append(thread)
 
-        for thread in threads:
-            thread.join()
-        #print("matching all done")
+            for thread in threads:
+                thread.join()
+            #print("matching all done")
 
-        positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
+            positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
-        for i in range(FLAGS.batch_size):
-            if np.sum(positives_f, axis=1)[i] >= 2:
-                np.set_printoptions(threshold=np.nan)
-                #print(true_locs_f[i][positives_f[0] == 1][:2])
-                #print(pred_locs_f[i][positives_f[0] == 1][:2])
-                #print(pred_locs_f[i][:100])
+            for i in range(FLAGS.batch_size):
+                if np.sum(positives_f, axis=1)[i] >= 2:
+                    np.set_printoptions(threshold=np.nan)
+                    #print(true_locs_f[i][positives_f[0] == 1][:2])
+                    #print(pred_locs_f[i][positives_f[0] == 1][:2])
+                    #print(pred_locs_f[i][:100])
 
-        if step < 4000:
-            lr = 8e-4
-        elif step < 180000:
-            lr = 1e-3
-        elif step < 240000:
-            lr = 1e-4
-        else:
-            lr = 1e-5
+            if step < 4000:
+                lr = 8e-4
+            elif step < 180000:
+                lr = 1e-3
+            elif step < 240000:
+                lr = 1e-4
+            else:
+                lr = 1e-5
 
-        print("training")
-        _, c_loss_f, l_loss_f, loss_f, step = sess.run([optimizer, class_loss, loc_loss, total_loss, global_step],
-                                   feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
-                                           true_labels_ph:true_labels_f, true_locs_ph:true_locs_f, lr_ph:lr})
+            print("training")
+            _, c_loss_f, l_loss_f, loss_f, step = sess.run([optimizer, class_loss, loc_loss, total_loss, global_step],
+                                       feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
+                                               true_labels_ph:true_labels_f, true_locs_ph:true_locs_f, lr_ph:lr})
 
-        print("%i: %f" % (step, loss_f))
+            print("%i: %f" % (step, loss_f))
 
-        tfc.summary_float(step, "loss", loss_f, summary_writer)
-        tfc.summary_float(step, "class loss", c_loss_f, summary_writer)
-        tfc.summary_float(step, "loc loss", l_loss_f, summary_writer)
+            tfc.summary_float(step, "loss", loss_f, summary_writer)
+            tfc.summary_float(step, "class loss", c_loss_f, summary_writer)
+            tfc.summary_float(step, "loc loss", l_loss_f, summary_writer)
 
-        if step % 100 == 0:
-            saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
+            if step % 1000 == 0:
+                saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
+    else:
+        test_batches = coco.create_batches(1, shuffle=True)
+
+        while True:
+            batch = test_batches.next()
+            imgs, anns = coco.preprocess_batch(batch)
+            pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step],
+                                                        feed_dict={imgs_ph: imgs, bn: False})
+            boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+            draw_outputs(imgs[0], boxes_, confidences_, wait=0)
 
 if __name__ == "__main__":
     flags.DEFINE_string("model_dir", "summaries/test0", "model directory")
     flags.DEFINE_integer("batch_size", 32, "batch size")
     flags.DEFINE_boolean("display", True, "display relevant windows")
+    flags.DEFINE_boolean("test", False, "test")
 
-    start_train()
+    start_train(train=not FLAGS.test)

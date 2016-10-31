@@ -11,6 +11,9 @@ from ssd_common import draw_ann
 ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_train2014.json"
 train_dir = "/media/sean/HDCL-UT1/mscoco/train2014"
 
+val_ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_val2014.json"
+val_dir = "/media/sean/HDCL-UT1/mscoco/val2014"
+
 coco = COCO(ann_file)
 cats = coco.loadCats(coco.getCatIds())
 names = [cat['name'] for cat in cats]

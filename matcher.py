@@ -74,24 +74,23 @@ class Matcher:
         for index, (gt_box, id) in zip(range(len(anns)), anns):
 
             top_match = (None, 0)
-            gt_c_x = gt_box[0] + gt_box[2]/2.0
-            gt_c_y = gt_box[1] + gt_box[3]/2.0
 
             for o in range(len(layer_boxes)):
-                #for y in range(c.out_shapes[o][2]):
-                    #for x in range(c.out_shapes[o][1]):
+                x1 = max(int(gt_box[0] / (1.0 / c.out_shapes[o][2])), 0)
+                y1 = max(int(gt_box[1] / (1.0 / c.out_shapes[o][1])), 0)
+                x2 = min(int((gt_box[0] + gt_box[2]) / (1.0 / c.out_shapes[o][2]))+2, c.out_shapes[o][2])
+                y2 = min(int((gt_box[1] + gt_box[3]) / (1.0 / c.out_shapes[o][1]))+2, c.out_shapes[o][1])
 
-                x = int(gt_c_x / (1.0 / c.out_shapes[o][2]))
-                y = int(gt_c_y / (1.0 / c.out_shapes[o][1]))
-
-                for i in range(layer_boxes[o]):
-                    box = c.defaults[o][x][y][i]
-                    jacc = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
-                    if jacc >= 0.5:
-                        matches[o][x][y][i] = (gt_box, id)
-                        positive_count += 1
-                    if jacc > top_match[1]:
-                        top_match = ([o, x, y, i], jacc)
+                for y in range(y1, y2):
+                    for x in range(x1, x2):
+                        for i in range(layer_boxes[o]):
+                            box = c.defaults[o][x][y][i]
+                            jacc = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
+                            if jacc >= 0.5:
+                                matches[o][x][y][i] = (gt_box, id)
+                                positive_count += 1
+                            if jacc > top_match[1]:
+                                top_match = ([o, x, y, i], jacc)
 
             top_box = top_match[0]
             #if box's jaccard is <0.5 but is the best
@@ -110,7 +109,7 @@ class Matcher:
                 matches[box[0]][box[1]][box[2]][box[3]] = -1
                 negative_count += 1
 
-        print("%i positives" % positive_count)
-        print("%i/%i negatives" % (negative_count, negative_max))
+        #print("%i positives" % positive_count)
+        #print("%i/%i negatives" % (negative_count, negative_max))
 
         return matches
