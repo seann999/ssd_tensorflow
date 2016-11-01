@@ -8,153 +8,174 @@ import skimage.transform
 from constants import image_size, classes
 from ssd_common import draw_ann
 
-ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_train2014.json"
+train_ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_train2014.json"
 train_dir = "/media/sean/HDCL-UT1/mscoco/train2014"
 
 val_ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_val2014.json"
 val_dir = "/media/sean/HDCL-UT1/mscoco/val2014"
 
-coco = COCO(ann_file)
-cats = coco.loadCats(coco.getCatIds())
-names = [cat['name'] for cat in cats]
-# id is number from pycocotools
-# i is actual index used
-id2name = dict((cat["id"], cat["name"]) for cat in cats)
-id2i = dict((cats[i]['id'], i) for i in range(len(cats)))
-i2name = {v: id2name[k] for k, v in id2i.iteritems()}
-i2name[classes] = "void"
+class Loader:
+    def __init__(self, train=True):
+        if train:
+            self.image_dir = train_dir
+            ann_file = train_ann_file
+            self.get_image_path = self.get_train_path
+        else:
+            self.image_dir = val_dir
+            ann_file = val_ann_file
+            self.get_image_path = self.get_val_path
 
-print("NUMBER OF CLASSES: %i" % len(id2name))
+        self.coco = COCO(ann_file)
+        cats = self.coco.loadCats(self.coco.getCatIds())
+        names = [cat['name'] for cat in cats]
+        # id is number from pycocotools
+        # i is actual index used
+        id2name = dict((cat["id"], cat["name"]) for cat in cats)
+        self.id2i = dict((cats[i]['id'], i) for i in range(len(cats)))
+        self.i2name = {v: id2name[k] for k, v in self.id2i.iteritems()}
+        self.i2name[classes] = "void"
 
-cat_ids = coco.getCatIds()
-img_ids = coco.getImgIds()
+        print("NUMBER OF CLASSES: %i" % len(id2name))
 
-print("%i total training images" % len(img_ids))
+        self.cat_ids = self.coco.getCatIds()
+        self.img_ids = self.coco.getImgIds()
 
-def preprocess_batch(batch):
-    imgs = []
-    all_used_anns = []
+        print("%i total training images" % len(self.img_ids))
 
-    for img, anns in batch:
-        used_anns = []
-        w = img.shape[1]
-        h = img.shape[0]
+    def preprocess_batch(self, batch, augment=True):
+        imgs = []
+        all_used_anns = []
 
-        option = np.random.randint(2)
+        for img, anns in batch:
+            used_anns = []
+            w = img.shape[1]
+            h = img.shape[0]
 
-        if option == 0:
-            sample = img
-        elif option == 1:
-            ratio = random.uniform(0.5, 2.0) #  0.5=portrait, 2.0=landscape
-            scale = random.uniform(0.1, 1.0)
+            option = np.random.randint(2)
 
-            if w > h:
-                p_w = w * scale
-                p_h = p_w / ratio
+            if augment:
+                option = 0
 
-                if p_w > w or p_h > h:
-                    p_h = h * scale
-                    p_w = p_h * ratio
-            else:
-                p_h = h * scale
-                p_w = p_h * ratio
+            if option == 0:
+                sample = img
+            elif option == 1:
+                ratio = random.uniform(0.5, 2.0) #  0.5=portrait, 2.0=landscape
+                scale = random.uniform(0.1, 1.0)
 
-                if p_w > w or p_h > h:
+                if w > h:
                     p_w = w * scale
                     p_h = p_w / ratio
 
-            if p_w > w or p_h > h:
-                print("error: patch is too big.")
+                    if p_w > w or p_h > h:
+                        p_h = h * scale
+                        p_w = p_h * ratio
+                else:
+                    p_h = h * scale
+                    p_w = p_h * ratio
 
-            p_x = random.uniform(0, w - p_w)
-            p_y = random.uniform(0, h - p_h)
+                    if p_w > w or p_h > h:
+                        p_w = w * scale
+                        p_h = p_w / ratio
 
-            sample = img[int(p_y):int(p_y + p_h), int(p_x):int(p_x + p_w)]
+                if p_w > w or p_h > h:
+                    print("error: patch is too big.")
+
+                p_x = random.uniform(0, w - p_w)
+                p_y = random.uniform(0, h - p_h)
+
+                sample = img[int(p_y):int(p_y + p_h), int(p_x):int(p_x + p_w)]
+
+                for box, id in anns:
+                    box[0] -= p_x
+                    box[1] -= p_y
+
+            # warning: this function turns 255 -> 1.0
+            resized_img = skimage.transform.resize(sample, (image_size, image_size))
 
             for box, id in anns:
-                box[0] -= p_x
-                box[1] -= p_y
+                scaleX = 1.0 / float(sample.shape[1])
+                scaleY = 1.0 / float(sample.shape[0])
 
-        # warning: this function turns 255 -> 1.0
-        resized_img = skimage.transform.resize(sample, (image_size, image_size))
+                box[0] *= scaleX
+                box[1] *= scaleY
+                box[2] *= scaleX
+                box[3] *= scaleY
 
-        for box, id in anns:
-            scaleX = 1.0 / float(sample.shape[1])
-            scaleY = 1.0 / float(sample.shape[0])
+            for box, id in anns: # only use boxes with center in image
+                cX = box[0] + box[2] / 2.0
+                cY = box[1] + box[3] / 2.0
 
-            box[0] *= scaleX
-            box[1] *= scaleY
-            box[2] *= scaleX
-            box[3] *= scaleY
+                if cX >= 0 and cX <= 1 and cY >= 0 and cY <= 1:
+                    used_anns.append((box, id))
 
-        for box, id in anns: # only use boxes with center in image
-            cX = box[0] + box[2] / 2.0
-            cY = box[1] + box[3] / 2.0
+            if random.uniform(0.0, 1.0) < 0.5:
+                resized_img = np.fliplr(resized_img)
 
-            if cX >= 0 and cX <= 1 and cY >= 0 and cY <= 1:
-                used_anns.append((box, id))
+                for box, id in used_anns:
+                    box[0] = 1.0 - box[0] - box[2]
 
-        if random.uniform(0.0, 1.0) < 0.5:
-            resized_img = np.fliplr(resized_img)
+            imgs.append(resized_img)
+            all_used_anns.append(used_anns)
 
-            for box, id in used_anns:
-                box[0] = 1.0 - box[0] - box[2]
+        return np.asarray(imgs), all_used_anns
 
-        imgs.append(resized_img)
-        all_used_anns.append(used_anns)
+    def get_train_path(self, id):
+        return "COCO_train2014_%012d.jpg" % id
 
-    return np.asarray(imgs), all_used_anns
+    def get_val_path(self, id):
+        return "COCO_val2014_%012d.jpg" % id
 
-def create_batches(batch_size, shuffle=True):
-    # 1 batch = [(image, [([x, y, w, h], id), ([x, y, w, h], id), ...]), ...]
-    batch = []
+    def create_batches(self, batch_size, shuffle=True):
+        # 1 batch = [(image, [([x, y, w, h], id), ([x, y, w, h], id), ...]), ...]
+        batch = []
 
-    while True:
-        indices = range(len(img_ids))
+        while True:
+            indices = range(len(self.img_ids))
 
-        if shuffle:
-            indices = np.random.permutation(indices)
+            if shuffle:
+                indices = np.random.permutation(indices)
 
-        for index in indices:
-            img = coco.loadImgs(img_ids[index])[0]
-            path = os.path.join(train_dir, "COCO_train2014_%012d.jpg" % img['id'])
-            I = io.imread(path)
+            for index in indices:
+                img = self.coco.loadImgs(self.img_ids[index])[0]
+                path = os.path.join(self.image_dir, self.get_image_path(img['id']))
+                I = io.imread(path)
 
-            if len(I.shape) != 3:
-                continue
+                if len(I.shape) != 3:
+                    continue
 
-            ann_ids = coco.getAnnIds(imgIds=img['id'], catIds=cat_ids, iscrowd=None)
-            anns = coco.loadAnns(ann_ids)
-            ann_list = []
+                ann_ids = self.coco.getAnnIds(imgIds=img['id'], catIds=self.cat_ids, iscrowd=None)
+                anns = self.coco.loadAnns(ann_ids)
+                ann_list = []
 
-            for ann in anns:
-                bb = [f for f in ann["bbox"]]
-                ann_list.append((bb, id2i[ann["category_id"]]))
+                for ann in anns:
+                    bb = [f for f in ann["bbox"]]
+                    ann_list.append((bb, self.id2i[ann["category_id"]]))
 
-            batch.append((I, ann_list))
+                batch.append((I, ann_list))
 
-            if len(batch) >= batch_size:
-                yield batch
-                batch = []
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
 
-def create_preprocessed_batches(batch_size, shuffle=True):
-    batches = create_batches(batch_size, shuffle)
-    while True:
-        batch = batches.next()
-        yield preprocess_batch(batch)
+#def create_preprocessed_batches(batch_size, shuffle=True):
+#    batches = create_batches(batch_size, shuffle)
+#    while True:
+#        batch = batches.next()
+#        yield preprocess_batch(batch)
 
 if __name__ == "__main__":
-    batch = create_batches(1, shuffle=False)
+    loader = Loader()
+    batch = loader.create_batches(1, shuffle=False)
 
     for b in batch:
         # [(image, [([x, y, w, h], id), ([x, y, w, h], id), ...]), ...]
 
-        imgs, anns = preprocess_batch(b)
+        imgs, anns = loader.preprocess_batch(b)
 
         I = imgs[0] * 255.0
 
         for box_coords, id in anns[0]:
-            draw_ann(I, box_coords, i2name[id])
+            draw_ann(I, box_coords, loader.i2name[id])
 
         I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
         cv2.imshow("original image", cv2.cvtColor(b[0][0], cv2.COLOR_RGB2BGR))

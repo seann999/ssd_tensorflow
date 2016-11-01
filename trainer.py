@@ -11,10 +11,13 @@ import tf_common as tfc
 import signal
 import sys
 import cv2
+import colorsys
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 from threading import Thread
+
+i2name = None
 
 def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
@@ -90,7 +93,7 @@ def draw_matches(I, boxes, matches, anns):
 
     for gt_box, id in anns:
         draw_rect(I, gt_box, (0, 255, 0), 3)
-        cv2.putText(I, coco.i2name[id], (int(gt_box[0] * image_size), int((gt_box[1] + gt_box[3]) * image_size)),
+        cv2.putText(I, i2name[id], (int(gt_box[0] * image_size), int((gt_box[1] + gt_box[3]) * image_size)),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0))
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
@@ -111,7 +114,7 @@ def draw_matches2(I, pos, neg, true_labels, true_locs):
                         draw_rect(I, coords, (0, 255, 0))
                         coords = center2cornerbox(d)
                         draw_rect(I, coords, (0, 0, 255))
-                        cv2.putText(I, coco.i2name[true_labels[index]],
+                        cv2.putText(I, i2name[true_labels[index]],
                                     (int(coords[0] * image_size), int((coords[1] + coords[3]) * image_size)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
                     elif neg[index] > 0:
@@ -129,17 +132,17 @@ def draw_matches2(I, pos, neg, true_labels, true_locs):
     cv2.imshow("matches2", I)
     cv2.waitKey(1)
 
-def basic_nms(boxes, confidences, thres=0.00):
+def basic_nms(boxes, confidences, thres=0.45):
     re = []
 
     def pass_nms(c, lab):
         for box_, conf_, top_label_ in re:
-            if lab == top_label_ and calc_jaccard(c, boxes[box_[0]][box_[1]][box_[2]][box_[3]]) > thres:
+            if lab == top_label_ and calc_jaccard(c, center2cornerbox(boxes[box_[0]][box_[1]][box_[2]][box_[3]])) > thres:
                 return False
         return True
 
     for box, conf, top_label in confidences:
-        coords = boxes[box[0]][box[1]][box[2]][box[3]]
+        coords = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
 
         if top_label != classes and pass_nms(coords, top_label):
             re.append((box, conf, top_label))
@@ -152,27 +155,29 @@ def basic_nms(boxes, confidences, thres=0.00):
 def draw_outputs(I, boxes, confidences, wait=1):
     I = np.copy(I) * 255.0
 
+    filtered_boxes = []
     filtered = []
 
     for box, conf, top_label in confidences:
         if conf >= 0.01:
+            b = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
+            filtered_boxes.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])
             filtered.append((box, conf, top_label))
         else:
             break
 
+    #nms = non_max_suppression_fast(np.asarray(filtered_boxes), 1.00)
     confidences = basic_nms(boxes, filtered)
 
-    for box, conf, top_label in confidences:
+    for box, conf, top_label in confidences[::-1]:#[filtered[i] for i in nms]:
         if top_label != classes:
             #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
             coords = boxes[box[0]][box[1]][box[2]][box[3]]
             coords = center2cornerbox(coords)
+            c = colorsys.hsv_to_rgb(((top_label * 17) % 255) / 255.0, 1.0, 1.0)
+            c = tuple([255*c[i] for i in range(3)])
 
-            draw_rect(I, coords, (0, 0, 255), int(conf*5.0+1.0))
-            cv2.putText(I, coco.i2name[top_label], (int((coords[0]) * image_size),
-                                                    int((coords[1] + coords[3]) * image_size)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
-        else: # confidences sorted
-            break
+            draw_ann(I, coords, i2name[top_label], color=c, confidence=conf)
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imshow("outputs", I)
@@ -189,14 +194,6 @@ def start_train(train=True):
     c.out_shapes = out_shapes
     c.defaults = model.default_boxes(out_shapes)
     box_matcher = Matcher()
-    batches = coco.create_batches(FLAGS.batch_size, shuffle=True)
-
-    def signal_handler(signal, frame):
-        print('You pressed Ctrl+C!')
-        saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
 
     # variables in model are already initialized, so only initialize those declared after
     with tf.variable_scope("optimizer"):
@@ -216,11 +213,23 @@ def start_train(train=True):
         print("restored %s" % ckpt.model_checkpoint_path)
 
     if train:
+        def signal_handler(signal, frame):
+            print('You pressed Ctrl+C!')
+            saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
+
+        train_loader = coco.Loader(False)
+        global i2name
+        i2name = train_loader.i2name
+        train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
+
         while True:
             print("new batch")
-            batch = batches.next()
+            batch = train_batches.next()
             print("preprocessing")
-            imgs, anns = coco.preprocess_batch(batch)
+            imgs, anns = train_loader.preprocess_batch(batch)
             print("retrieving outputs")
             pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
 
@@ -284,11 +293,16 @@ def start_train(train=True):
             if step % 1000 == 0:
                 saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
     else:
-        test_batches = coco.create_batches(1, shuffle=True)
+        cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
+        print("DETECTION ON TEST IMAGES")
+        loader = coco.Loader(False)
+        test_batches = loader.create_batches(1, shuffle=True)
+        global i2name
+        i2name = loader.i2name
 
         while True:
             batch = test_batches.next()
-            imgs, anns = coco.preprocess_batch(batch)
+            imgs, anns = loader.preprocess_batch(batch)
             pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step],
                                                         feed_dict={imgs_ph: imgs, bn: False})
             boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
