@@ -11,7 +11,7 @@ Results of some hand-picked test images through an experimental run with MS COCO
 
 Just looking through them, the results are okay but not good enough.
 
-However, there are still major things needed to do that was done in the original paper but not here:
+However, there are still major things needed to do that was done in the original paper for COCO but not here:
 
 * Train on 500x500 images (this was 300x300)
 * Use COCO trainval (this was only train)
