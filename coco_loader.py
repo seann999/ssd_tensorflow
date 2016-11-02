@@ -7,6 +7,10 @@ import random
 import skimage.transform
 from constants import image_size, classes
 from ssd_common import draw_ann
+import threading
+import tensorflow as tf
+
+FLAGS = tf.app.flags.FLAGS
 
 train_ann_file = "/data/mscoco/annotations/instances_train2014.json"
 train_dir = "/data/mscoco/train2014"
@@ -157,11 +161,23 @@ class Loader:
                     yield batch
                     batch = []
 
-#def create_preprocessed_batches(batch_size, shuffle=True):
-#    batches = create_batches(batch_size, shuffle)
-#    while True:
-#        batch = batches.next()
-#        yield preprocess_batch(batch)
+class PoolLoader:
+    def __init__(self):
+        self.loader = Loader(True)
+        self.batches = loader.create_batches(FLAGS.batch_size)
+        self.pool = []
+
+    def fill_pool(self):
+        while True:
+            if len(self.pool) < 100:
+                self.pool.append(self.batches.next())
+
+    def start(self):
+        t = threading.Thread(target=self.fill_pool)
+        t.start()
+
+    def get_batch(self):
+        return self.pool.pop(0)
 
 if __name__ == "__main__":
     loader = Loader()
