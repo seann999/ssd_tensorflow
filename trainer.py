@@ -13,12 +13,41 @@ import sys
 import cv2
 import colorsys
 import time
+import skimage.transform
+import skimage.io as io
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 from threading import Thread
 
 i2name = None
+
+class SSD:
+    def __init__(self):
+        self.sess = tf.Session()
+        self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model.model(self.sess)
+        total_boxes = self.pred_labels.get_shape().as_list()[1]
+        self.positives_ph, self.negatives_ph, self.true_labels_ph, self.true_locs_ph, self.total_loss, self.class_loss, self.loc_loss = \
+            model.loss(self.pred_labels, self.pred_locs, total_boxes)
+        out_shapes = [out.get_shape().as_list() for out in self.output_tensors]
+        c.out_shapes = out_shapes
+        c.defaults = model.default_boxes(out_shapes)
+
+        # variables in model are already initialized, so only initialize those declared after
+        with tf.variable_scope("optimizer"):
+            self.global_step = tf.Variable(0)
+            self.lr_ph = tf.placeholder(tf.float32, shape=[])
+
+            self.optimizer = tf.train.AdamOptimizer(1e-3).minimize(self.total_loss, global_step=self.global_step)
+        new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
+        self.sess.run(tf.initialize_variables(new_vars))
+
+        ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
+        self.saver = tf.train.Saver()
+
+        if ckpt and ckpt.model_checkpoint_path:
+            self.saver.restore(self.sess, ckpt.model_checkpoint_path)
+            print("restored %s" % ckpt.model_checkpoint_path)
 
 def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
@@ -182,126 +211,146 @@ def draw_outputs(I, boxes, confidences, wait=1):
     cv2.imshow("outputs", I)
     cv2.waitKey(wait)
 
-def start_train(train=True):
-    sess = tf.Session()
-    imgs_ph, bn, output_tensors, pred_labels, pred_locs = model.model(sess)
-    total_boxes = pred_labels.get_shape().as_list()[1]
-    positives_ph, negatives_ph, true_labels_ph, true_locs_ph, total_loss, class_loss, loc_loss =\
-        model.loss(pred_labels, pred_locs, total_boxes)
-    out_shapes = [out.get_shape().as_list() for out in output_tensors]
-    c.out_shapes = out_shapes
-    c.defaults = model.default_boxes(out_shapes)
-    box_matcher = Matcher()
-
-    # variables in model are already initialized, so only initialize those declared after
-    with tf.variable_scope("optimizer"):
-        global_step = tf.Variable(0)
-        lr_ph = tf.placeholder(tf.float32, shape=[])
-
-        optimizer = tf.train.AdamOptimizer(1e-3).minimize(total_loss, global_step=global_step)
-    new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
-    sess.run(tf.initialize_variables(new_vars))
-
-    ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
-    saver = tf.train.Saver()
-    summary_writer = tf.train.SummaryWriter(FLAGS.model_dir)
-
-    if ckpt and ckpt.model_checkpoint_path:
-        saver.restore(sess, ckpt.model_checkpoint_path)
-        print("restored %s" % ckpt.model_checkpoint_path)
+def start_train():
+    ssd = SSD()
 
     t = time.time()
 
-    if train:
-        def signal_handler(signal, frame):
-            print('You pressed Ctrl+C!')
-            saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
-            sys.exit(0)
+    def signal_handler(signal, frame):
+        print('You pressed Ctrl+C!')
+        ssd.saver.save(ssd.sess, "%s/ckpt" % FLAGS.model_dir, step)
+        sys.exit(0)
 
-        signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
-        train_loader = coco.Loader(True)
-        global i2name
-        i2name = train_loader.i2name
-        train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
-        #train_loader = coco.PoolLoader()
-        #i2name = train_loader.loader.i2name
+    summary_writer = tf.train.SummaryWriter(FLAGS.model_dir)
+    box_matcher = Matcher()
 
-        while True:
-            batch = train_batches.next()
-            #batch = train_loader.get_batch()
+    train_loader = coco.Loader(True)
+    global i2name
+    i2name = train_loader.i2name
+    train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
+    #train_loader = coco.PoolLoader()
+    #i2name = train_loader.loader.i2name
 
-            imgs, anns = train_loader.preprocess_batch(batch)
+    while True:
+        batch = train_batches.next()
+        #batch = train_loader.get_batch()
 
-            pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
+        imgs, anns = train_loader.preprocess_batch(batch)
 
-            batch_values = [None for i in range(FLAGS.batch_size)]
+        pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
+                                                        feed_dict={ssd.imgs_ph: imgs, ssd.bn: False})
 
-            def match_boxes(batch_i):
-                #a = time.time()
-                matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
-                #print("a: %f" % (time.time() - a))
-                #a = time.time()
-                positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
+        batch_values = [None for i in range(FLAGS.batch_size)]
 
-                batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
+        def match_boxes(batch_i):
+            #a = time.time()
+            matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
+            #print("a: %f" % (time.time() - a))
+            #a = time.time()
+            positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
 
-                if batch_i == 0:
-                    boxes_, confidences_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i])
-                    if FLAGS.display:
-                        draw_outputs(imgs[batch_i], boxes_, confidences_)
-                        draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
-                        draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
-                #print("b: %f" % (time.time() - a))
+            batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
 
-            for batch_i in range(FLAGS.batch_size):
-                match_boxes(batch_i)
+            if batch_i == 0:
+                boxes_, confidences_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i])
+                if FLAGS.display:
+                    draw_outputs(imgs[batch_i], boxes_, confidences_)
+                    draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
+                    draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
+            #print("b: %f" % (time.time() - a))
 
-            positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
+        for batch_i in range(FLAGS.batch_size):
+            match_boxes(batch_i)
 
-            if step < 4000:
-                lr = 8e-4
-            elif step < 180000:
-                lr = 1e-3
-            elif step < 240000:
-                lr = 1e-4
-            else:
-                lr = 1e-5
+        positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
 
-            _, c_loss_f, l_loss_f, loss_f, step = sess.run([optimizer, class_loss, loc_loss, total_loss, global_step],
-                                       feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
-                                               true_labels_ph:true_labels_f, true_locs_ph:true_locs_f, lr_ph:lr})
+        if step < 4000:
+            lr = 8e-4
+        elif step < 180000:
+            lr = 1e-3
+        elif step < 240000:
+            lr = 1e-4
+        else:
+            lr = 1e-5
 
-            t = time.time() - t
-            print("%i: %f (%f secs)" % (step, loss_f, t))
-            t = time.time()
+        _, c_loss_f, l_loss_f, loss_f, step = ssd.sess.run([ssd.optimizer, ssd.class_loss, ssd.loc_loss, ssd.total_loss, ssd.global_step],
+                                   feed_dict={ssd.imgs_ph: imgs, ssd.bn: True, ssd.positives_ph:positives_f, ssd.negatives_ph:negatives_f,
+                                           ssd.true_labels_ph:true_labels_f, ssd.true_locs_ph:true_locs_f, ssd.lr_ph:lr})
 
-            tfc.summary_float(step, "loss", loss_f, summary_writer)
-            tfc.summary_float(step, "class loss", c_loss_f, summary_writer)
-            tfc.summary_float(step, "loc loss", l_loss_f, summary_writer)
+        t = time.time() - t
+        print("%i: %f (%f secs)" % (step, loss_f, t))
+        t = time.time()
 
-            if step % 1000 == 0:
-                saver.save(sess, "%s/ckpt" % FLAGS.model_dir, step)
-    else:
-        cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
-        print("DETECTION ON TEST IMAGES")
-        loader = coco.Loader(False)
-        test_batches = loader.create_batches(1, shuffle=True)
-        global i2name
-        i2name = loader.i2name
+        tfc.summary_float(step, "loss", loss_f, summary_writer)
+        tfc.summary_float(step, "class loss", c_loss_f, summary_writer)
+        tfc.summary_float(step, "loc loss", l_loss_f, summary_writer)
 
-        while True:
-            batch = test_batches.next()
-            imgs, anns = loader.preprocess_batch(batch)
-            pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step],
-                                                        feed_dict={imgs_ph: imgs, bn: False})
-            boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
-            draw_outputs(imgs[0], boxes_, confidences_, wait=0)
+        if step % 1000 == 0:
+            ssd.saver.save(ssd.sess, "%s/ckpt" % FLAGS.model_dir, step)
+
+def evaluate_images():
+    ssd = SSD()
+
+    cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
+    loader = coco.Loader(False)
+    test_batches = loader.create_batches(1, shuffle=True)
+    global i2name
+    i2name = loader.i2name
+
+    while True:
+        batch = test_batches.next()
+        imgs, anns = loader.preprocess_batch(batch)
+        pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
+                                                        feed_dict={ssd.imgs_ph: imgs, ssd.bn: False})
+        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+        draw_outputs(imgs[0], boxes_, confidences_, wait=0)
+
+def resize_boxes(resized, original, boxes):
+    scale_x = original.shape[1] / float(resized.shape[1])
+    scale_y = original.shape[0] / float(resized.shape[0])
+
+    for o in range(len(layer_boxes)):
+        for y in range(c.out_shapes[o][2]):
+            for x in range(c.out_shapes[o][1]):
+                for i in range(layer_boxes[o]):
+                    boxes[o][x][y][i][0] *= scale_x
+                    boxes[o][x][y][i][1] *= scale_y
+                    boxes[o][x][y][i][2] *= scale_x
+                    boxes[o][x][y][i][3] *= scale_y
+
+def evaluate_image(path):
+    ssd = SSD()
+
+    # needs better way
+    loader = coco.Loader(False)
+    global i2name
+    i2name = loader.i2name
+
+    cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
+    sample = io.imread(path)
+    resized_img = skimage.transform.resize(sample, (image_size, image_size))
+    pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
+                                                    feed_dict={ssd.imgs_ph: [resized_img], ssd.bn: False})
+    boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+
+    draw_outputs(resized_img, boxes_, confidences_, wait=0)
+
+    resize_boxes(resized_img, sample, boxes_)
+
+    draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=0)
 
 if __name__ == "__main__":
     flags.DEFINE_string("model_dir", "summaries/test0", "model directory")
     flags.DEFINE_integer("batch_size", 32, "batch size")
     flags.DEFINE_boolean("display", True, "display relevant windows")
-    flags.DEFINE_boolean("test", False, "test")
+    flags.DEFINE_string("mode", "train", "train, images, image")
+    flags.DEFINE_string("image_path", "", "path to image")
 
-    start_train(train=not FLAGS.test)
+    if FLAGS.mode == "train":
+        start_train()
+    elif FLAGS.mode == "images":
+        evaluate_images()
+    elif FLAGS.mode == "image":
+        evaluate_image(FLAGS.image_path)
