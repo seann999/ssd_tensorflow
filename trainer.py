@@ -12,6 +12,7 @@ import signal
 import sys
 import cv2
 import colorsys
+import time
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
@@ -163,8 +164,6 @@ def draw_outputs(I, boxes, confidences, wait=1):
             b = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
             filtered_boxes.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])
             filtered.append((box, conf, top_label))
-        else:
-            break
 
     #nms = non_max_suppression_fast(np.asarray(filtered_boxes), 1.00)
     confidences = basic_nms(boxes, filtered)
@@ -184,8 +183,7 @@ def draw_outputs(I, boxes, confidences, wait=1):
     cv2.waitKey(wait)
 
 def start_train(train=True):
-    sess = tf.Session(
-        config=tf.ConfigProto(gpu_options=(tf.GPUOptions(per_process_gpu_memory_fraction=0.7))))
+    sess = tf.Session()
     imgs_ph, bn, output_tensors, pred_labels, pred_locs = model.model(sess)
     total_boxes = pred_labels.get_shape().as_list()[1]
     positives_ph, negatives_ph, true_labels_ph, true_locs_ph, total_loss, class_loss, loc_loss =\
@@ -212,6 +210,8 @@ def start_train(train=True):
         saver.restore(sess, ckpt.model_checkpoint_path)
         print("restored %s" % ckpt.model_checkpoint_path)
 
+    t = time.time()
+
     if train:
         def signal_handler(signal, frame):
             print('You pressed Ctrl+C!')
@@ -220,24 +220,25 @@ def start_train(train=True):
 
         signal.signal(signal.SIGINT, signal_handler)
 
-        train_loader = coco.Loader(False)
+        train_loader = coco.Loader(True)
         global i2name
         i2name = train_loader.i2name
         train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
 
         while True:
-            print("new batch")
             batch = train_batches.next()
-            print("preprocessing")
+
             imgs, anns = train_loader.preprocess_batch(batch)
-            print("retrieving outputs")
+
             pred_labels_f, pred_locs_f, step = sess.run([pred_labels, pred_locs, global_step], feed_dict={imgs_ph: imgs, bn: False})
 
             batch_values = [None for i in range(FLAGS.batch_size)]
 
             def match_boxes(batch_i):
+                #a = time.time()
                 matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
-
+                #print("a: %f" % (time.time() - a))
+                #a = time.time()
                 positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
 
                 batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
@@ -248,27 +249,12 @@ def start_train(train=True):
                         draw_outputs(imgs[batch_i], boxes_, confidences_)
                         draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
                         draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
+                #print("b: %f" % (time.time() - a))
 
-            #print("matching...")
-            threads = []
             for batch_i in range(FLAGS.batch_size):
-                #match_boxes(batch_i)
-                thread = Thread(target=match_boxes, args=(batch_i,))
-                thread.start()
-                threads.append(thread)
-
-            for thread in threads:
-                thread.join()
-            #print("matching all done")
+                match_boxes(batch_i)
 
             positives_f, negatives_f, true_labels_f, true_locs_f = [np.stack(m) for m in zip(*batch_values)]
-
-            for i in range(FLAGS.batch_size):
-                if np.sum(positives_f, axis=1)[i] >= 2:
-                    np.set_printoptions(threshold=np.nan)
-                    #print(true_locs_f[i][positives_f[0] == 1][:2])
-                    #print(pred_locs_f[i][positives_f[0] == 1][:2])
-                    #print(pred_locs_f[i][:100])
 
             if step < 4000:
                 lr = 8e-4
@@ -279,12 +265,13 @@ def start_train(train=True):
             else:
                 lr = 1e-5
 
-            print("training")
             _, c_loss_f, l_loss_f, loss_f, step = sess.run([optimizer, class_loss, loc_loss, total_loss, global_step],
                                        feed_dict={imgs_ph: imgs, bn: True, positives_ph:positives_f, negatives_ph:negatives_f,
                                                true_labels_ph:true_labels_f, true_locs_ph:true_locs_f, lr_ph:lr})
 
-            print("%i: %f" % (step, loss_f))
+            t = time.time() - t
+            print("%i: %f (%f secs)" % (step, loss_f, t))
+            t = time.time()
 
             tfc.summary_float(step, "loss", loss_f, summary_writer)
             tfc.summary_float(step, "class loss", c_loss_f, summary_writer)

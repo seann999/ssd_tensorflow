@@ -8,11 +8,11 @@ import skimage.transform
 from constants import image_size, classes
 from ssd_common import draw_ann
 
-train_ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_train2014.json"
-train_dir = "/media/sean/HDCL-UT1/mscoco/train2014"
+train_ann_file = "/data/mscoco/annotations/instances_train2014.json"
+train_dir = "/data/mscoco/train2014"
 
-val_ann_file = "/media/sean/HDCL-UT1/mscoco/annotations/instances_val2014.json"
-val_dir = "/media/sean/HDCL-UT1/mscoco/val2014"
+val_ann_file = "/data/mscoco/annotations/instances_val2014.json"
+val_dir = "/data/mscoco/val2014"
 
 class Loader:
     def __init__(self, train=True):

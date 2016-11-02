@@ -36,36 +36,36 @@ def format_output(pred_labels, pred_locs):
 
                     index += 1
 
-    sorted_confidences = sorted(confidences, key=lambda tup: tup[1])[::-1]
+    #sorted_confidences = sorted(confidences, key=lambda tup: tup[1])[::-1]
 
-    return boxes, sorted_confidences
+    return boxes, confidences
 
-def sort_confidences(pred_labels):
+def get_top_confidences(pred_labels, top_k):
     confidences = []
-    index = 0
 
-    for o_i in range(len(layer_boxes)):
-        for y in range(c.out_shapes[o_i][2]):
-            for x in range(c.out_shapes[o_i][1]):
-                for i in range(layer_boxes[o_i]):
-                    logits = pred_labels[index]
-                    probs = np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)
-                    confidences.append(([o_i, x, y, i], np.amax(probs),
-                                        np.argmax(logits)))
+    for logits in pred_labels:
+        probs = np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)
+        top_label = np.amax(probs)
+        confidences.append(top_label)
 
-                    index += 1
+    #top_confidences = sorted(confidences, key=lambda tup: tup[1])[::-1]
 
-    sorted_confidences = sorted(confidences, key=lambda tup: tup[1])[::-1]
+    k = min(top_k, len(confidences))
+    top_confidences = np.argpartition(np.asarray(confidences), -k)[-k:]
 
-    return sorted_confidences
+    return top_confidences
 
 class Matcher:
     def __init__(self):
-       pass
+        self.index2indices = []
+
+        for o_i in range(len(layer_boxes)):
+            for y in range(c.out_shapes[o_i][2]):
+                for x in range(c.out_shapes[o_i][1]):
+                    for i in range(layer_boxes[o_i]):
+                        self.index2indices.append([o_i, y, x, i])
 
     def match_boxes(self, pred_labels, anns):
-        sorted_confidences = sort_confidences(pred_labels)
-
         matches = [[[[None for i in range(c.layer_boxes[o])] for x in range(c.out_shapes[o][1])] for y in range(c.out_shapes[o][2])]
                  for o in range(len(layer_boxes))]
 
@@ -101,13 +101,17 @@ class Matcher:
         negative_max = positive_count * negposratio
         negative_count = 0
 
-        for box, conf, top_label in sorted_confidences:
-            if negative_count >= negative_max:
-                break
+        confidences = get_top_confidences(pred_labels, negative_max)
 
-            if matches[box[0]][box[1]][box[2]][box[3]] is None and top_label != classes:
-                matches[box[0]][box[1]][box[2]][box[3]] = -1
+        for i in confidences:
+            indices = self.index2indices[i]
+
+            if matches[indices[0]][indices[1]][indices[2]][indices[3]] is None and np.argmax(pred_labels[i]) != classes:
+                matches[indices[0]][indices[1]][indices[2]][indices[3]] = -1
                 negative_count += 1
+
+                if negative_count >= negative_max:
+                    break
 
         #print("%i positives" % positive_count)
         #print("%i/%i negatives" % (negative_count, negative_max))
