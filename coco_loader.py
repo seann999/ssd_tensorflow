@@ -164,7 +164,7 @@ class Loader:
 class PoolLoader:
     def __init__(self):
         self.loader = Loader(True)
-        self.batches = loader.create_batches(FLAGS.batch_size)
+        self.batches = self.loader.create_batches(FLAGS.batch_size)
         self.pool = []
 
     def fill_pool(self):

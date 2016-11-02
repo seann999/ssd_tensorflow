@@ -220,16 +220,16 @@ def start_train(train=True):
 
         signal.signal(signal.SIGINT, signal_handler)
 
-        #train_loader = coco.Loader(True)
+        train_loader = coco.Loader(True)
         global i2name
-        #i2name = train_loader.i2name
-        #train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
-        train_loader = coco.PoolLoader()
-        i2name = train_loader.loader.i2name
+        i2name = train_loader.i2name
+        train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
+        #train_loader = coco.PoolLoader()
+        #i2name = train_loader.loader.i2name
 
         while True:
-            #batch = train_batches.next()
-            batch = train_loader.get_batch()
+            batch = train_batches.next()
+            #batch = train_loader.get_batch()
 
             imgs, anns = train_loader.preprocess_batch(batch)
 
