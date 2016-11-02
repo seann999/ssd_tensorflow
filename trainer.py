@@ -15,6 +15,7 @@ import colorsys
 import time
 import skimage.transform
 import skimage.io as io
+import webcam
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
@@ -341,12 +342,36 @@ def evaluate_image(path):
 
     draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=0)
 
+def show_webcam(address):
+    cam = webcam.WebcamStream(address)
+    cam.start_stream_threads()
+
+    ssd = SSD()
+
+    # needs better way
+    loader = coco.Loader(False)
+    global i2name
+    i2name = loader.i2name
+
+    cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
+
+    while True:
+        sample = cam.image
+        resized_img = skimage.transform.resize(sample, (image_size, image_size))
+        pred_labels_f, pred_locs_f = ssd.sess.run([ssd.pred_labels, ssd.pred_locs],
+                                                        feed_dict={ssd.imgs_ph: [resized_img], ssd.bn: False})
+        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+
+        resize_boxes(resized_img, sample, boxes_)
+        draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=10)
+
 if __name__ == "__main__":
     flags.DEFINE_string("model_dir", "summaries/test0", "model directory")
     flags.DEFINE_integer("batch_size", 32, "batch size")
     flags.DEFINE_boolean("display", True, "display relevant windows")
-    flags.DEFINE_string("mode", "train", "train, images, image")
+    flags.DEFINE_string("mode", "train", "train, images, image, webcam")
     flags.DEFINE_string("image_path", "", "path to image")
+    flags.DEFINE_string("webcam_ip", "", "webcam ip")
 
     if FLAGS.mode == "train":
         start_train()
@@ -354,3 +379,5 @@ if __name__ == "__main__":
         evaluate_images()
     elif FLAGS.mode == "image":
         evaluate_image(FLAGS.image_path)
+    elif FLAGS.mode == "webcam":
+        show_webcam(FLAGS.webcam_ip)
