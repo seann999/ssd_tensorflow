@@ -50,6 +50,15 @@ class SSD:
             self.saver.restore(self.sess, ckpt.model_checkpoint_path)
             print("restored %s" % ckpt.model_checkpoint_path)
 
+    def single_image(self, sample):
+        resized_img = skimage.transform.resize(sample, (image_size, image_size))
+        pred_labels_f, pred_locs_f, step = self.sess.run([self.pred_labels, self.pred_locs, self.global_step],
+                                                        feed_dict={self.imgs_ph: [resized_img], self.bn: False})
+        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+        resize_boxes(resized_img, sample, boxes_)
+
+        return boxes_, confidences_
+
 def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
     c_y = default[1] + offsets[1]
@@ -339,14 +348,10 @@ def get_image_detections(path):
     i2name = loader.i2name
     del loader
 
-    cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
+    #cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
     sample = io.imread(path)
-    resized_img = skimage.transform.resize(sample, (image_size, image_size))
-    pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
-                                                    feed_dict={ssd.imgs_ph: [resized_img], ssd.bn: False})
-    boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
 
-    resize_boxes(resized_img, sample, boxes_)
+    boxes_, confidences_ = ssd.single_image(sample)
 
     return boxes_, confidences_
 
