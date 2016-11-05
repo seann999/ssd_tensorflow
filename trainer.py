@@ -172,33 +172,40 @@ def basic_nms(boxes, confidences, thres=0.45):
                 return False
         return True
 
+    index = 0
+
     for box, conf, top_label in confidences:
         coords = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
 
         if top_label != classes and pass_nms(coords, top_label):
             re.append((box, conf, top_label))
+            #re.append(index)
 
             if len(re) >= 200:
                 break
+        index += 1
 
     return re
 
-def draw_outputs(I, boxes, confidences, wait=1):
-    I = np.copy(I) * 255.0
+def draw_outputs(img, boxes, confidences, wait=1):
+    I = img * 255.0
 
-    filtered_boxes = []
+    #filtered_boxes = []
     filtered = []
 
+    index = 0
     for box, conf, top_label in confidences:
         if conf >= 0.01:
-            b = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
-            filtered_boxes.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])
+            #b = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
+            #filtered_boxes.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])
             filtered.append((box, conf, top_label))
+            #filtered.append(index)
+        index += 1
 
     #nms = non_max_suppression_fast(np.asarray(filtered_boxes), 1.00)
-    confidences = basic_nms(boxes, filtered)
+    picks = basic_nms(boxes, filtered)
 
-    for box, conf, top_label in confidences[::-1]:#[filtered[i] for i in nms]:
+    for box, conf, top_label in picks:#[filtered[i] for i in picks]:
         if top_label != classes:
             #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
             coords = boxes[box[0]][box[1]][box[2]][box[3]]
@@ -211,6 +218,8 @@ def draw_outputs(I, boxes, confidences, wait=1):
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imshow("outputs", I)
     cv2.waitKey(wait)
+
+    del filtered
 
 def start_train():
     ssd = SSD()
@@ -321,13 +330,14 @@ def resize_boxes(resized, original, boxes):
                     boxes[o][x][y][i][2] *= scale_x
                     boxes[o][x][y][i][3] *= scale_y
 
-def evaluate_image(path):
+def get_image_detections(path):
     ssd = SSD()
 
     # needs better way
     loader = coco.Loader(False)
     global i2name
     i2name = loader.i2name
+    del loader
 
     cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
     sample = io.imread(path)
@@ -336,9 +346,17 @@ def evaluate_image(path):
                                                     feed_dict={ssd.imgs_ph: [resized_img], ssd.bn: False})
     boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
 
-    draw_outputs(resized_img, boxes_, confidences_, wait=0)
-
     resize_boxes(resized_img, sample, boxes_)
+
+    return boxes_, confidences_
+
+def evaluate_image(path):
+    boxes_, confidences_ = get_image_detections(path)
+
+    sample = io.imread(path)
+    #resized_img = skimage.transform.resize(sample, (image_size, image_size))
+
+    #draw_outputs(resized_img, boxes_, confidences_, wait=0)
 
     draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=0)
 
@@ -355,12 +373,17 @@ def show_webcam(address):
 
     cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
 
+    boxes_ = None
+    confidences_ = None
+
     while True:
         sample = cam.image
         resized_img = skimage.transform.resize(sample, (image_size, image_size))
+
         pred_labels_f, pred_locs_f = ssd.sess.run([ssd.pred_labels, ssd.pred_locs],
                                                         feed_dict={ssd.imgs_ph: [resized_img], ssd.bn: False})
-        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+
+        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0], boxes_, confidences_)
 
         resize_boxes(resized_img, sample, boxes_)
         draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=10)

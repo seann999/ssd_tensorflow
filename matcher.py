@@ -4,12 +4,15 @@ from constants import layer_boxes, classes, negposratio
 from ssd_common import center2cornerbox, calc_jaccard
 import numpy as np
 
-def format_output(pred_labels, pred_locs):
+def format_output(pred_labels, pred_locs, boxes=None, confidences=None):
 
-    boxes = [
-        [[[None for i in range(layer_boxes[o])] for x in range(c.out_shapes[o][1])] for y in range(c.out_shapes[o][2])]
-        for o in range(len(layer_boxes))]
-    confidences = []
+    if boxes is None:
+        boxes = [
+            [[[None for i in range(layer_boxes[o])] for x in range(c.out_shapes[o][1])] for y in range(c.out_shapes[o][2])]
+            for o in range(len(layer_boxes))]
+
+    if confidences is None:
+        confidences = []
     index = 0
 
     for o_i in range(len(layer_boxes)):
@@ -27,8 +30,12 @@ def format_output(pred_labels, pred_locs):
                     boxes[o_i][x][y][i] = [c_x, c_y, w, h]
                     logits = pred_labels[index]
                     #if np.argmax(logits) != classes+1:
+                    info = ([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)), np.argmax(logits))
                         # indices, max probability, corresponding label
-                    confidences.append(([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)), np.argmax(logits)))
+                    if len(confidences) < index+1:
+                        confidences.append(info)
+                    else:
+                        confidences[index] = info
                     #else:
                     #    logits = pred_labels[index][:-1]
                     #    confidences.append(([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)),
