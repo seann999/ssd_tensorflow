@@ -26,7 +26,7 @@ i2name = None
 class SSD:
     def __init__(self, model_dir=None, gpu_fraction=1.0):
         config = tf.ConfigProto(log_device_placement=True)
-        config.gpu_options.per_process_gpu_memory=gpu_fraction
+        config.gpu_options.per_process_gpu_memory_fraction=gpu_fraction
         self.sess = tf.Session(config=config)
         self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model.model(self.sess)
         total_boxes = self.pred_labels.get_shape().as_list()[1]
