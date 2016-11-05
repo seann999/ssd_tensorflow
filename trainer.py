@@ -24,7 +24,7 @@ from threading import Thread
 i2name = None
 
 class SSD:
-    def __init__(self, model_dir=FLAGS.model_dir):
+    def __init__(self, model_dir=None):
         self.sess = tf.Session()
         self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model.model(self.sess)
         total_boxes = self.pred_labels.get_shape().as_list()[1]
@@ -42,6 +42,9 @@ class SSD:
             self.optimizer = tf.train.AdamOptimizer(1e-3).minimize(self.total_loss, global_step=self.global_step)
         new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
         self.sess.run(tf.initialize_variables(new_vars))
+
+        if model_dir is None:
+            model_dir = FLAGS.model_dir
 
         ckpt = tf.train.get_checkpoint_state(model_dir)
         self.saver = tf.train.Saver()
