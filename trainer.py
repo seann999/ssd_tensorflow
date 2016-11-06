@@ -61,7 +61,7 @@ class SSD:
         pred_labels_f, pred_locs_f, step = self.sess.run([self.pred_labels, self.pred_locs, self.global_step],
                                                         feed_dict={self.imgs_ph: [resized_img], self.bn: False})
         boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
-        resize_boxes(resized_img, sample, boxes_)
+        resize_boxes(resized_img, sample, boxes_, scale=float(image_size))
 
         return postprocess_boxes(boxes_, confidences_)
 
@@ -328,9 +328,9 @@ def evaluate_images():
         boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
         draw_outputs(imgs[0], boxes_, confidences_, wait=0)
 
-def resize_boxes(resized, original, boxes):
-    scale_x = original.shape[1] / float(resized.shape[1])
-    scale_y = original.shape[0] / float(resized.shape[0])
+def resize_boxes(resized, original, boxes, scale=1.0):
+    scale_x = original.shape[1] / float(resized.shape[1]) * scale
+    scale_y = original.shape[0] / float(resized.shape[0]) * scale
 
     for o in range(len(layer_boxes)):
         for y in range(c.out_shapes[o][2]):
