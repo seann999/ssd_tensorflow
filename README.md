@@ -30,8 +30,11 @@ Concerns:
 
 * TensorFlow
 * OpenCV
+* MS COCO tools
 
 ## Basic Instructions
+
+* This project is still under development--it's especially slow, but here are some instructions anyway.
 
 1. You need vgg16.npy from [this repository](https://github.com/machrisaa/tensorflow-vgg), which is what I used for the base network. Unfortunately, it's a big file, and for now it's just uploaded to Mega, so you might need an account. [Direct link to npy](https://mega.nz/#!YU1FWJrA!O1ywiCS2IiOlUCtCpI6HTJOMrneN-Qdv3ywQP5poecM)
 
@@ -41,4 +44,4 @@ Concerns:
 
 4. Change the COCO paths in coco_loader.py
 
-5. Test or train
+5. Test or train with trainer.py
