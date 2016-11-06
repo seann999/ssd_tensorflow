@@ -16,6 +16,7 @@ import time
 import skimage.transform
 import skimage.io as io
 import webcam
+import pickle
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
@@ -347,11 +348,8 @@ def resize_boxes(resized, original, boxes):
 def get_image_detections(path):
     ssd = SSD()
 
-    # needs better way
-    loader = coco.Loader(False)
     global i2name
-    i2name = loader.i2name
-    del loader
+    i2name = pickle.load(open("i2name.p", "rb"))
 
     #cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
     sample = io.imread(path)
@@ -370,16 +368,19 @@ def evaluate_image(path):
 
     draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=0)
 
+def create_i2name():
+    loader = coco.Loader(False)
+    i2name = loader.i2name
+    pickle.dump(i2name, open("i2name.p", "wb"))
+
 def show_webcam(address):
     cam = webcam.WebcamStream(address)
     cam.start_stream_threads()
 
     ssd = SSD()
 
-    # needs better way
-    loader = coco.Loader(False)
     global i2name
-    i2name = loader.i2name
+    i2name = pickle.load(open("i2name.p", "rb"))
 
     cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
 
