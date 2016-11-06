@@ -25,3 +25,20 @@ Other major improvements needed:
 Concerns:
 
 * Simple momentum optimizer stopped working (stopped converging) at some point during development, but adding batch normalization made it work again 
+
+## Dependencies
+
+* TensorFlow
+* OpenCV
+
+## Basic Instructions
+
+1. You need vgg16.npy from [this repository](https://github.com/machrisaa/tensorflow-vgg), which is what I used for the base network. Unfortunately, it's a big file, and for now it's just uploaded to Mega, so you might need an account. [Direct link to npy](https://mega.nz/#!YU1FWJrA!O1ywiCS2IiOlUCtCpI6HTJOMrneN-Qdv3ywQP5poecM)
+
+2. For now, the code uses and depends on MS COCO. You need the MS COCO dataset from [here](http://mscoco.org/dataset/#download). You should at least have the 2014 training images and corresponding 2014 train/val object instance annotations.
+
+3. Download and install COCO tools from [here](https://github.com/pdollar/coco)
+
+4. Change the COCO paths in coco_loader.py
+
+5. Test or train
