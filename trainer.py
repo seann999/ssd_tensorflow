@@ -63,7 +63,7 @@ class SSD:
         boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
         resize_boxes(resized_img, sample, boxes_)
 
-        return boxes_, confidences_
+        return postprocess_boxes(boxes_, confidences_)
 
 def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
@@ -178,21 +178,19 @@ def draw_matches2(I, pos, neg, true_labels, true_locs):
     cv2.imshow("matches2", I)
     cv2.waitKey(1)
 
-def basic_nms(boxes, confidences, thres=0.45):
+def basic_nms(boxes, thres=0.45):
     re = []
 
     def pass_nms(c, lab):
         for box_, conf_, top_label_ in re:
-            if lab == top_label_ and calc_jaccard(c, center2cornerbox(boxes[box_[0]][box_[1]][box_[2]][box_[3]])) > thres:
+            if lab == top_label_ and calc_jaccard(c, boxes[box_[0]][box_[1]][box_[2]][box_[3]]) > thres:
                 return False
         return True
 
     index = 0
 
-    for box, conf, top_label in confidences:
-        coords = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
-
-        if top_label != classes and pass_nms(coords, top_label):
+    for box, conf, top_label in boxes:
+        if top_label != classes and pass_nms(box, top_label):
             re.append((box, conf, top_label))
             #re.append(index)
 
@@ -202,39 +200,37 @@ def basic_nms(boxes, confidences, thres=0.45):
 
     return re
 
+def postprocess_boxes(boxes, confidences):
+    filtered = []
+
+    for box, conf, top_label in confidences:
+        if conf >= 0.01:
+            coords = boxes[box[0]][box[1]][box[2]][box[3]]
+            coords = center2cornerbox(coords)
+
+            filtered.append((coords, conf, top_label))
+
+    return basic_nms(filtered)
+
+
 def draw_outputs(img, boxes, confidences, wait=1):
     I = img * 255.0
 
-    #filtered_boxes = []
-    filtered = []
-
-    index = 0
-    for box, conf, top_label in confidences:
-        if conf >= 0.01:
-            #b = center2cornerbox(boxes[box[0]][box[1]][box[2]][box[3]])
-            #filtered_boxes.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])
-            filtered.append((box, conf, top_label))
-            #filtered.append(index)
-        index += 1
-
     #nms = non_max_suppression_fast(np.asarray(filtered_boxes), 1.00)
-    picks = basic_nms(boxes, filtered)
+    picks = postprocess_boxes(boxes, confidences)
 
     for box, conf, top_label in picks:#[filtered[i] for i in picks]:
         if top_label != classes:
             #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
-            coords = boxes[box[0]][box[1]][box[2]][box[3]]
-            coords = center2cornerbox(coords)
+
             c = colorsys.hsv_to_rgb(((top_label * 17) % 255) / 255.0, 1.0, 1.0)
             c = tuple([255*c[i] for i in range(3)])
 
-            draw_ann(I, coords, i2name[top_label], color=c, confidence=conf)
+            draw_ann(I, box, i2name[top_label], color=c, confidence=conf)
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imshow("outputs", I)
     cv2.waitKey(wait)
-
-    del filtered
 
 def start_train():
     ssd = SSD()
