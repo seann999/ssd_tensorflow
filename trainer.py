@@ -183,7 +183,7 @@ def basic_nms(boxes, thres=0.45):
 
     def pass_nms(c, lab):
         for box_, conf_, top_label_ in re:
-            if lab == top_label_ and calc_jaccard(c, boxes[box_[0]][box_[1]][box_[2]][box_[3]]) > thres:
+            if lab == top_label_ and calc_jaccard(c, box_) > thres:
                 return False
         return True
 
