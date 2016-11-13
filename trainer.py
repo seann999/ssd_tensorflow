@@ -25,8 +25,8 @@ from threading import Thread
 i2name = None
 
 class SSD:
-    def __init__(self, model_dir=None, gpu_fraction=1.0):
-        config = tf.ConfigProto(log_device_placement=True)
+    def __init__(self, model_dir=None, gpu_fraction=0.7):
+        config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.per_process_gpu_memory_fraction=gpu_fraction
         self.sess = tf.Session(config=config)
         self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model.model(self.sess)
@@ -348,7 +348,7 @@ def get_image_detections(path):
     i2name = pickle.load(open("i2name.p", "rb"))
 
     #cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
-    sample = io.imread(path)
+    sample = io.imread(path)[:, :, :3]
 
     boxes_, confidences_ = ssd.single_image(sample)
 
