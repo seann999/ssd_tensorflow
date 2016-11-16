@@ -56,14 +56,14 @@ class SSD:
             self.saver.restore(self.sess, ckpt.model_checkpoint_path)
             print("restored %s" % ckpt.model_checkpoint_path)
 
-    def single_image(self, sample):
+    def single_image(self, sample, min_conf=0.01, nms=0.45):
         resized_img = skimage.transform.resize(sample, (image_size, image_size))
         pred_labels_f, pred_locs_f, step = self.sess.run([self.pred_labels, self.pred_locs, self.global_step],
                                                         feed_dict={self.imgs_ph: [resized_img], self.bn: False})
         boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
         resize_boxes(resized_img, sample, boxes_, scale=float(image_size))
 
-        return postprocess_boxes(boxes_, confidences_)
+        return postprocess_boxes(boxes_, confidences_, min_conf, nms)
 
 def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
@@ -200,17 +200,17 @@ def basic_nms(boxes, thres=0.45):
 
     return re
 
-def postprocess_boxes(boxes, confidences):
+def postprocess_boxes(boxes, confidences, min_conf=0.01, nms=0.45):
     filtered = []
 
     for box, conf, top_label in confidences:
-        if conf >= 0.01:
+        if conf >= min_conf:
             coords = boxes[box[0]][box[1]][box[2]][box[3]]
             coords = center2cornerbox(coords)
 
             filtered.append((coords, conf, top_label))
 
-    return basic_nms(filtered)
+    return basic_nms(filtered, nms)
 
 
 def draw_outputs(img, boxes, confidences, wait=1):
