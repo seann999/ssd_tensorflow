@@ -51,6 +51,7 @@ class SSD:
             print("restored %s" % ckpt.model_checkpoint_path)
         else:
             init_model()
+            self.saver = tf.train.Saver()
 
         print("SSD model initialized.")
 

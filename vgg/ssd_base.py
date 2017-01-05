@@ -28,7 +28,7 @@ class Vgg16:
         """
 
         start_time = time.time()
-        print("build model started")
+        print("build VGG started")
         rgb_scaled = rgb * 255.0
 
         # Convert RGB to BGR
@@ -80,7 +80,7 @@ class Vgg16:
         """
 
         self.data_dict = None
-        print("build model finished: %ds" % (time.time() - start_time))
+        print("build VGG finished: %ds" % (time.time() - start_time))
 
     def avg_pool(self, bottom, name):
         return tf.nn.avg_pool(bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME', name=name)
