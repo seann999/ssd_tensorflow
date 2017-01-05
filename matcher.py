@@ -1,5 +1,5 @@
 import constants as c
-from constants import layer_boxes, classes, negposratio
+from constants import layer_boxes, negposratio
 # cant import out_shapes and defaults here since its still not initialized
 from ssd_common import center2cornerbox, calc_jaccard
 import numpy as np
@@ -70,10 +70,10 @@ class Matcher:
             for y in range(c.out_shapes[o_i][2]):
                 for x in range(c.out_shapes[o_i][1]):
                     for i in range(layer_boxes[o_i]):
-                        self.index2indices.append([o_i, y, x, i])
+                        self.index2indices.append([o_i, x, y, i])
 
     def match_boxes(self, pred_labels, anns):
-        matches = [[[[None for i in range(c.layer_boxes[o])] for x in range(c.out_shapes[o][1])] for y in range(c.out_shapes[o][2])]
+        matches = [[[[None for i in range(c.layer_boxes[o])] for y in range(c.out_shapes[o][2])] for x in range(c.out_shapes[o][1])]
                  for o in range(len(layer_boxes))]
 
         positive_count = 0
@@ -113,7 +113,8 @@ class Matcher:
         for i in confidences:
             indices = self.index2indices[i]
 
-            if matches[indices[0]][indices[1]][indices[2]][indices[3]] is None and np.argmax(pred_labels[i]) != classes:
+            # warning: indices switched
+            if matches[indices[0]][indices[1]][indices[2]][indices[3]] is None and np.argmax(pred_labels[i]) != c.classes:
                 matches[indices[0]][indices[1]][indices[2]][indices[3]] = -1
                 negative_count += 1
 

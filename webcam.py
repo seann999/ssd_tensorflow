@@ -28,5 +28,9 @@ class WebcamStream:
                 #cv2.imshow('i', self.image)
                 #cv2.waitKey(1)
 
-    def start_stream_threads(self):
-        threading._start_new_thread(self.start_stream, ())
+    def start_webcam(self):
+        cap = cv2.VideoCapture(self.address)
+
+        while True:
+            ret, frame = cap.read()
+            self.image = frame

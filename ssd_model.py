@@ -1,11 +1,70 @@
 import numpy as np
 import tensorflow as tf
 import vgg.ssd_base as vgg16
+import loaderutil
 import tf_common as tfc
-from constants import *
+import constants as c
+from constants import layer_boxes
+import skimage.transform
+import matcher
+
+FLAGS = tf.app.flags.FLAGS
+
+class SSD:
+    def __init__(self, model_dir=None, gpu_fraction=0.7):
+        config = tf.ConfigProto(allow_soft_placement=True)
+        config.gpu_options.per_process_gpu_memory_fraction = gpu_fraction
+
+        self.sess = tf.Session(config=config)
+
+        if model_dir is None:
+            model_dir = FLAGS.model_dir
+
+        ckpt = tf.train.get_checkpoint_state(model_dir)
+
+        def init_model():
+            self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model(self.sess)
+            total_boxes = self.pred_labels.get_shape().as_list()[1]
+            self.positives_ph, self.negatives_ph, self.true_labels_ph, self.true_locs_ph, self.total_loss, self.class_loss, self.loc_loss = \
+                loss(self.pred_labels, self.pred_locs, total_boxes)
+            out_shapes = [out.get_shape().as_list() for out in self.output_tensors]
+            c.out_shapes = out_shapes
+            c.defaults = default_boxes(out_shapes)
+
+            # variables in model are already initialized, so only initialize those declared after
+            with tf.variable_scope("optimizer"):
+                self.global_step = tf.Variable(0)
+                self.lr_ph = tf.placeholder(tf.float32, shape=[])
+
+                self.optimizer = tf.train.AdamOptimizer(1e-3).minimize(self.total_loss, global_step=self.global_step)
+            # new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
+            # self.sess.run(tf.variables_initializer(new_vars))
+
+            # tensorflow keeps complaining so fuck it
+            self.sess.run(tf.global_variables_initializer(), feed_dict={self.bn: True})
+
+        if ckpt and ckpt.model_checkpoint_path:
+            init_model()
+            #tf.train.import_meta_graph('%s.meta' % ckpt.model_checkpoint_path)
+            self.saver = tf.train.Saver()
+            self.saver.restore(self.sess, ckpt.model_checkpoint_path)
+            print("restored %s" % ckpt.model_checkpoint_path)
+        else:
+            init_model()
+
+        print("SSD model initialized.")
+
+    def single_image(self, sample, min_conf=0.01, nms=0.45):
+        resized_img = skimage.transform.resize(sample, (c.image_size, c.image_size))
+        pred_labels_f, pred_locs_f, step = self.sess.run([self.pred_labels, self.pred_locs, self.global_step],
+                                                         feed_dict={self.imgs_ph: [resized_img], self.bn: False})
+        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
+        loaderutil.resize_boxes(resized_img, sample, boxes_, scale=float(c.image_size))
+
+        return postprocess_boxes(boxes_, confidences_, min_conf, nms)
 
 def model(sess):
-    images = tf.placeholder("float", [None, image_size, image_size, 3])
+    images = tf.placeholder("float", [None, c.image_size, c.image_size, 3])
     bn = tf.placeholder(tf.bool)
 
     vgg = vgg16.Vgg16()
@@ -32,7 +91,9 @@ def model(sess):
 
         p11 = tf.nn.avg_pool(c10_2, [1, 3, 3, 1], [1, 1, 1, 1], "VALID")
 
-        c_ = classes+1
+        c_ = c.classes+1
+
+        print("model output classes: %i" % c_)
 
         out1 = tfc.conv2d("out1", vgg.conv4_3, 512, layer_boxes[0] * (c_ + 4), bn, size=3, act=None)
         out2 = tfc.conv2d("out2", c7, h[2], layer_boxes[1] * (c_ + 4), bn, size=3, act=None)
@@ -41,9 +102,8 @@ def model(sess):
         out5 = tfc.conv2d("out5", c10_2, h[8], layer_boxes[4] * (c_ + 4), bn, size=3, act=None)
         out6 = tfc.conv2d("out6", p11, h[8], layer_boxes[5] * (c_ + 4), bn, size=1, act=None)
 
-    new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="ssd_extension")
-    sess.run(tf.initialize_variables(new_vars))
-
+    #new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="ssd_extension")
+    #sess.run(tf.variables_initializer(new_vars))
     outputs = [out1, out2, out3, out4, out5, out6]
 
     outfs = []
@@ -86,7 +146,7 @@ def loss(pred_labels, pred_locs, total_boxes):
     return positives, negatives, true_labels, true_locs, total_loss, tf.reduce_mean(class_loss), tf.reduce_mean(loc_loss)
 
 def box_scale(k):
-    s_min = box_s_min
+    s_min = c.box_s_min
     s_max = 0.95
     m = 6.0
 
@@ -110,14 +170,14 @@ def default_boxes(out_shapes):
                 y_boxes = []
                 conv4_3 = o_i == 0
 
-                rs = box_ratios
+                rs = c.box_ratios
 
                 if conv4_3:
-                    rs = conv4_3_ratios
+                    rs = c.conv4_3_ratios
 
                 for i in range(len(rs)):
                     if conv4_3:
-                        scale = conv4_3_box_scale
+                        scale = c.conv4_3_box_scale
                     else:
                         scale = s_k
 

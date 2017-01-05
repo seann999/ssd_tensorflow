@@ -1,10 +1,11 @@
 import tensorflow as tf
-import model
+import ssd_model
 import matcher
 from matcher import Matcher
 import coco_loader as coco
+import ade_loader
 import constants as c
-from constants import layer_boxes, classes
+from constants import layer_boxes
 from ssd_common import *
 import numpy as np
 import tf_common as tfc
@@ -17,53 +18,14 @@ import skimage.transform
 import skimage.io as io
 import webcam
 import pickle
+import loaderutil
+import threading
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 from threading import Thread
 
 i2name = None
-
-class SSD:
-    def __init__(self, model_dir=None, gpu_fraction=0.7):
-        config = tf.ConfigProto(allow_soft_placement=True)
-        config.gpu_options.per_process_gpu_memory_fraction=gpu_fraction
-        self.sess = tf.Session(config=config)
-        self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model.model(self.sess)
-        total_boxes = self.pred_labels.get_shape().as_list()[1]
-        self.positives_ph, self.negatives_ph, self.true_labels_ph, self.true_locs_ph, self.total_loss, self.class_loss, self.loc_loss = \
-            model.loss(self.pred_labels, self.pred_locs, total_boxes)
-        out_shapes = [out.get_shape().as_list() for out in self.output_tensors]
-        c.out_shapes = out_shapes
-        c.defaults = model.default_boxes(out_shapes)
-
-        # variables in model are already initialized, so only initialize those declared after
-        with tf.variable_scope("optimizer"):
-            self.global_step = tf.Variable(0)
-            self.lr_ph = tf.placeholder(tf.float32, shape=[])
-
-            self.optimizer = tf.train.AdamOptimizer(1e-3).minimize(self.total_loss, global_step=self.global_step)
-        new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
-        self.sess.run(tf.initialize_variables(new_vars))
-
-        if model_dir is None:
-            model_dir = FLAGS.model_dir
-
-        ckpt = tf.train.get_checkpoint_state(model_dir)
-        self.saver = tf.train.Saver()
-
-        if ckpt and ckpt.model_checkpoint_path:
-            self.saver.restore(self.sess, ckpt.model_checkpoint_path)
-            print("restored %s" % ckpt.model_checkpoint_path)
-
-    def single_image(self, sample, min_conf=0.01, nms=0.45):
-        resized_img = skimage.transform.resize(sample, (image_size, image_size))
-        pred_labels_f, pred_locs_f, step = self.sess.run([self.pred_labels, self.pred_locs, self.global_step],
-                                                        feed_dict={self.imgs_ph: [resized_img], self.bn: False})
-        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
-        resize_boxes(resized_img, sample, boxes_, scale=float(image_size))
-
-        return postprocess_boxes(boxes_, confidences_, min_conf, nms)
 
 def default2cornerbox(default, offsets):
     c_x = default[0] + offsets[0]
@@ -100,12 +62,12 @@ def prepare_feed(matches):
                     elif match == -1: # this default box was chosen to be a negative
                         positives_list.append(0)
                         negatives_list.append(1)
-                        true_labels_list.append(classes) # background class
+                        true_labels_list.append(c.classes) # background class
                         true_locs_list.append([0]*4)
                     else: # no influence for this training step
                         positives_list.append(0)
                         negatives_list.append(0)
-                        true_labels_list.append(classes)  # background class
+                        true_labels_list.append(c.classes)  # background class
                         true_locs_list.append([0]*4)
 
     a_positives = np.asarray(positives_list)
@@ -190,7 +152,7 @@ def basic_nms(boxes, thres=0.45):
     index = 0
 
     for box, conf, top_label in boxes:
-        if top_label != classes and pass_nms(box, top_label):
+        if top_label != c.classes and pass_nms(box, top_label):
             re.append((box, conf, top_label))
             #re.append(index)
 
@@ -217,23 +179,23 @@ def draw_outputs(img, boxes, confidences, wait=1):
     I = img * 255.0
 
     #nms = non_max_suppression_fast(np.asarray(filtered_boxes), 1.00)
-    picks = postprocess_boxes(boxes, confidences)
+    picks = postprocess_boxes(boxes, confidences, min_conf=0.3, nms=0.0)
 
     for box, conf, top_label in picks:#[filtered[i] for i in picks]:
-        if top_label != classes:
+        if top_label != c.classes:
             #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
 
-            c = colorsys.hsv_to_rgb(((top_label * 17) % 255) / 255.0, 1.0, 1.0)
-            c = tuple([255*c[i] for i in range(3)])
+            col = colorsys.hsv_to_rgb(((top_label * 17) % 255) / 255.0, 1.0, 1.0)
+            col = tuple([255*col[i] for i in range(3)])
 
-            draw_ann(I, box, i2name[top_label], color=c, confidence=conf)
+            draw_ann(I, box, i2name[top_label], color=col, confidence=conf)
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imshow("outputs", I)
     cv2.waitKey(wait)
 
-def start_train():
-    ssd = SSD()
+def start_train(train_loader):
+    ssd = ssd_model.SSD()
 
     t = time.time()
 
@@ -247,18 +209,23 @@ def start_train():
     summary_writer = tf.train.SummaryWriter(FLAGS.model_dir)
     box_matcher = Matcher()
 
-    train_loader = coco.Loader(True)
     global i2name
     i2name = train_loader.i2name
     train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
+
+    print(i2name)
+    print(len(i2name))
     #train_loader = coco.PoolLoader()
     #i2name = train_loader.loader.i2name
 
+    print("starting training loop.")
+
     while True:
+        print("getting batch")
         batch = train_batches.next()
         #batch = train_loader.get_batch()
 
-        imgs, anns = train_loader.preprocess_batch(batch)
+        imgs, anns = loaderutil.preprocess_batch(batch, image_size, augment=True)
 
         pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
                                                         feed_dict={ssd.imgs_ph: imgs, ssd.bn: False})
@@ -311,38 +278,24 @@ def start_train():
         if step % 1000 == 0:
             ssd.saver.save(ssd.sess, "%s/ckpt" % FLAGS.model_dir, step)
 
-def evaluate_images():
-    ssd = SSD()
+def evaluate_images(loader):
+    ssd = ssd_model.SSD()
 
     cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
-    loader = coco.Loader(False)
     test_batches = loader.create_batches(1, shuffle=True)
     global i2name
     i2name = loader.i2name
 
     while True:
         batch = test_batches.next()
-        imgs, anns = loader.preprocess_batch(batch)
+        imgs, anns = loaderutil.preprocess_batch(batch)
         pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
                                                         feed_dict={ssd.imgs_ph: imgs, ssd.bn: False})
         boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0])
         draw_outputs(imgs[0], boxes_, confidences_, wait=0)
 
-def resize_boxes(resized, original, boxes, scale=1.0):
-    scale_x = original.shape[1] / float(resized.shape[1]) * scale
-    scale_y = original.shape[0] / float(resized.shape[0]) * scale
-
-    for o in range(len(layer_boxes)):
-        for y in range(c.out_shapes[o][2]):
-            for x in range(c.out_shapes[o][1]):
-                for i in range(layer_boxes[o]):
-                    boxes[o][x][y][i][0] *= scale_x
-                    boxes[o][x][y][i][1] *= scale_y
-                    boxes[o][x][y][i][2] *= scale_x
-                    boxes[o][x][y][i][3] *= scale_y
-
 def get_image_detections(path):
-    ssd = SSD()
+    ssd = ssd_model.SSD()
 
     global i2name
     i2name = pickle.load(open("i2name.p", "rb"))
@@ -365,18 +318,18 @@ def evaluate_image(path):
     draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=0)
 
 def create_i2name():
-    loader = coco.Loader(False)
+    loader = coco.COCOLoader(False)
     i2name = loader.i2name
     pickle.dump(i2name, open("i2name.p", "wb"))
 
-def show_webcam(address):
+def show_webcam(address, loader):
     cam = webcam.WebcamStream(address)
-    cam.start_stream_threads()
+    threading._start_new_thread(cam.start_stream, ())
 
-    ssd = SSD()
+    ssd = ssd_model.SSD()
 
     global i2name
-    i2name = pickle.load(open("i2name.p", "rb"))
+    i2name = loader.i2name#pickle.load(open("i2name.p", "rb"))
 
     cv2.namedWindow("outputs", cv2.WINDOW_NORMAL)
 
@@ -385,6 +338,11 @@ def show_webcam(address):
 
     while True:
         sample = cam.image
+
+        if cam.image is None:
+            print("no image")
+            continue
+
         resized_img = skimage.transform.resize(sample, (image_size, image_size))
 
         pred_labels_f, pred_locs_f = ssd.sess.run([ssd.pred_labels, ssd.pred_locs],
@@ -392,22 +350,28 @@ def show_webcam(address):
 
         boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0], boxes_, confidences_)
 
-        resize_boxes(resized_img, sample, boxes_)
+        loaderutil.resize_boxes(resized_img, sample, boxes_)
         draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=10)
 
 if __name__ == "__main__":
     flags.DEFINE_string("model_dir", "summaries/test0", "model directory")
-    flags.DEFINE_integer("batch_size", 32, "batch size")
+    flags.DEFINE_integer("batch_size", 8, "batch size")
     flags.DEFINE_boolean("display", True, "display relevant windows")
     flags.DEFINE_string("mode", "train", "train, images, image, webcam")
     flags.DEFINE_string("image_path", "", "path to image")
     flags.DEFINE_string("webcam_ip", "", "webcam ip")
 
+    ade = ade_loader.AdeLoader(100)
+    c.classes = 100
+
+    #c.classes = 80
+
     if FLAGS.mode == "train":
-        start_train()
+        #start_train(coco.COCOLoader(True))
+        start_train(ade)
     elif FLAGS.mode == "images":
-        evaluate_images()
+        evaluate_images(coco.COCOLoader(False))
     elif FLAGS.mode == "image":
         evaluate_image(FLAGS.image_path)
     elif FLAGS.mode == "webcam":
-        show_webcam(FLAGS.webcam_ip)
+        show_webcam(FLAGS.webcam_ip, ade)
