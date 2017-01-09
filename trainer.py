@@ -222,8 +222,9 @@ def start_train(train_loader):
 
     print("starting training loop.")
 
-    cv2.namedWindow("seg", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("true seg", cv2.WINDOW_NORMAL)
+    if FLAGS.display:
+        cv2.namedWindow("seg", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("true seg", cv2.WINDOW_NORMAL)
 
     #batch_loader = train_loader.pooler(FLAGS.batch_size, shuffle=True)#train_batches)
 
