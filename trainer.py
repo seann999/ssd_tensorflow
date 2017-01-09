@@ -164,31 +164,33 @@ def basic_nms(boxes, thres=0.45):
 
 def postprocess_boxes(boxes, confidences, min_conf=0.01, nms=0.45):
     filtered = []
+    i = 0
 
     for box, conf, top_label in confidences:
-        if conf >= min_conf:
-            coords = boxes[box[0]][box[1]][box[2]][box[3]]
-            coords = center2cornerbox(coords)
 
-            filtered.append((coords, conf, top_label))
+        #print("%i: %s" % (i, top_label))
+        i += 1
+        if top_label != c.classes:
+            if conf >= min_conf:
+                coords = boxes[box[0]][box[1]][box[2]][box[3]]
+                coords = center2cornerbox(coords)
+
+                filtered.append((coords, conf, top_label))
 
     return basic_nms(filtered, nms)
 
 
-def draw_outputs(img, boxes, confidences, wait=1):
+def draw_outputs(img, boxes, confidences, i2name, wait=1):
     I = img * 255.0
 
     #nms = non_max_suppression_fast(np.asarray(filtered_boxes), 1.00)
-    picks = postprocess_boxes(boxes, confidences, min_conf=0.3, nms=0.0)
+    picks = postprocess_boxes(boxes, confidences, min_conf=0.5, nms=0.0)
 
     for box, conf, top_label in picks:#[filtered[i] for i in picks]:
-        if top_label != c.classes:
-            #print("%f: %s %s" % (conf, coco.i2name[top_label], box))
+        col = colorsys.hsv_to_rgb(((top_label * 17) % 255) / 255.0, 1.0, 1.0)
+        col = tuple([255*col[i] for i in range(3)])
 
-            col = colorsys.hsv_to_rgb(((top_label * 17) % 255) / 255.0, 1.0, 1.0)
-            col = tuple([255*col[i] for i in range(3)])
-
-            draw_ann(I, box, i2name[top_label], color=col, confidence=conf)
+        draw_ann(I, box, i2name[top_label], color=col, confidence=conf)
 
     I = cv2.cvtColor(I.astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imshow("outputs", I)
@@ -211,7 +213,7 @@ def start_train(train_loader):
 
     global i2name
     i2name = train_loader.i2name
-    train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
+    #train_batches = train_loader.create_batches(FLAGS.batch_size, shuffle=True)
 
     print(i2name)
     print(len(i2name))
@@ -220,35 +222,39 @@ def start_train(train_loader):
 
     print("starting training loop.")
 
+    cv2.namedWindow("seg", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("true seg", cv2.WINDOW_NORMAL)
+
+    #batch_loader = train_loader.pooler(FLAGS.batch_size, shuffle=True)#train_batches)
+
     while True:
         print("getting batch")
-        batch = train_batches.next()
+        imgs, anns, seg_imgs = train_loader.pop()
         #batch = train_loader.get_batch()
 
-        imgs, anns = loaderutil.preprocess_batch(batch, image_size, augment=True)
-
-        pred_labels_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels, ssd.pred_locs, ssd.global_step],
+        pred_amax_f, pred_argmax_f, pred_locs_f, step = ssd.sess.run([ssd.pred_labels_amax, ssd.pred_labels_argmax, ssd.pred_locs, ssd.global_step],
                                                         feed_dict={ssd.imgs_ph: imgs, ssd.bn: False})
 
         batch_values = [None for i in range(FLAGS.batch_size)]
 
         def match_boxes(batch_i):
             #a = time.time()
-            matches = box_matcher.match_boxes(pred_labels_f[batch_i], anns[batch_i])
+            matches = box_matcher.match_boxes(pred_amax_f[batch_i], pred_argmax_f[batch_i], anns[batch_i])
             #print("a: %f" % (time.time() - a))
             #a = time.time()
             positives_f, negatives_f, true_labels_f, true_locs_f = prepare_feed(matches)
 
             batch_values[batch_i] = (positives_f, negatives_f, true_labels_f, true_locs_f)
 
-            if batch_i == 0:
-                boxes_, confidences_ = matcher.format_output(pred_labels_f[batch_i], pred_locs_f[batch_i])
+            if batch_i == 0 and step % 1 == 0:
                 if FLAGS.display:
-                    draw_outputs(imgs[batch_i], boxes_, confidences_)
+                    boxes_, confidences_ = matcher.format_output(pred_amax_f[batch_i], pred_argmax_f[batch_i], pred_locs_f[batch_i])
+                    draw_outputs(imgs[batch_i], boxes_, confidences_, i2name)
                     draw_matches(imgs[batch_i], c.defaults, matches, anns[batch_i])
                     draw_matches2(imgs[batch_i], positives_f, negatives_f, true_labels_f, true_locs_f)
             #print("b: %f" % (time.time() - a))
 
+        print("matching")
         for batch_i in range(FLAGS.batch_size):
             match_boxes(batch_i)
 
@@ -263,9 +269,15 @@ def start_train(train_loader):
         else:
             lr = 1e-5
 
-        _, c_loss_f, l_loss_f, loss_f, step = ssd.sess.run([ssd.optimizer, ssd.class_loss, ssd.loc_loss, ssd.total_loss, ssd.global_step],
+        print("learning")
+        _, c_loss_f, l_loss_f, seg_loss_f, loss_f, segout, step = ssd.sess.run([ssd.optimizer, ssd.class_loss, ssd.loc_loss, ssd.seg_loss, ssd.total_loss, ssd.segout, ssd.global_step],
                                    feed_dict={ssd.imgs_ph: imgs, ssd.bn: True, ssd.positives_ph:positives_f, ssd.negatives_ph:negatives_f,
-                                           ssd.true_labels_ph:true_labels_f, ssd.true_locs_ph:true_locs_f, ssd.lr_ph:lr})
+                                           ssd.true_labels_ph:true_labels_f, ssd.true_locs_ph:true_locs_f, ssd.true_seg_ph: seg_imgs, ssd.lr_ph:lr})
+
+        if step % 1 == 0 and FLAGS.display:
+            seg = np.argmax(segout[0], axis=2)
+            cv2.imshow("seg", 1.0 - np.expand_dims(seg, axis=2) / 101.0)
+            cv2.imshow("true seg", 1.0 - np.expand_dims(seg_imgs[0], axis=2) / 101.0)
 
         t = time.time() - t
         print("%i: %f (%f secs)" % (step, loss_f, t))
@@ -274,6 +286,7 @@ def start_train(train_loader):
         tfc.summary_float(step, "loss", loss_f, summary_writer)
         tfc.summary_float(step, "class loss", c_loss_f, summary_writer)
         tfc.summary_float(step, "loc loss", l_loss_f, summary_writer)
+        tfc.summary_float(step, "seg loss", seg_loss_f, summary_writer)
 
         if step % 1000 == 0:
             ssd.saver.save(ssd.sess, "%s/ckpt" % FLAGS.model_dir, step)
@@ -345,10 +358,11 @@ def show_webcam(address, loader):
 
         resized_img = skimage.transform.resize(sample, (image_size, image_size))
 
-        pred_labels_f, pred_locs_f = ssd.sess.run([ssd.pred_labels, ssd.pred_locs],
+        pred_amax_f, pred_argmax_f, pred_locs_f = ssd.sess.run([ssd.pred_labels_amax, ssd.pred_labels_argmax, ssd.pred_locs],
                                                         feed_dict={ssd.imgs_ph: [resized_img], ssd.bn: False})
 
-        boxes_, confidences_ = matcher.format_output(pred_labels_f[0], pred_locs_f[0], boxes_, confidences_)
+
+        boxes_, confidences_ = matcher.format_output(pred_amax_f[0], pred_argmax_f[0], pred_locs_f[0], boxes_, confidences_)
 
         loaderutil.resize_boxes(resized_img, sample, boxes_)
         draw_outputs(np.asarray(sample) / 255.0, boxes_, confidences_, wait=10)
@@ -361,7 +375,7 @@ if __name__ == "__main__":
     flags.DEFINE_string("image_path", "", "path to image")
     flags.DEFINE_string("webcam_ip", "", "webcam ip")
 
-    ade = ade_loader.AdeLoader(100)
+    ade = ade_loader.Pooler(100, FLAGS.batch_size)
     c.classes = 100
 
     #c.classes = 80

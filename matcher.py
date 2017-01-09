@@ -4,7 +4,7 @@ from constants import layer_boxes, negposratio
 from ssd_common import center2cornerbox, calc_jaccard
 import numpy as np
 
-def format_output(pred_labels, pred_locs, boxes=None, confidences=None):
+def format_output(pred_labels_amax, pred_labels_argmax, pred_locs, boxes=None, confidences=None):
 
     if boxes is None:
         boxes = [
@@ -28,9 +28,8 @@ def format_output(pred_labels, pred_locs, boxes=None, confidences=None):
                     c_y = c.defaults[o_i][x][y][i][1] + diffs[1]
 
                     boxes[o_i][x][y][i] = [c_x, c_y, w, h]
-                    logits = pred_labels[index]
                     #if np.argmax(logits) != classes+1:
-                    info = ([o_i, x, y, i], np.amax(np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)), np.argmax(logits))
+                    info = ([o_i, x, y, i], pred_labels_amax[index], pred_labels_argmax[index])
                         # indices, max probability, corresponding label
                     if len(confidences) < index+1:
                         confidences.append(info)
@@ -48,17 +47,10 @@ def format_output(pred_labels, pred_locs, boxes=None, confidences=None):
     return boxes, confidences
 
 def get_top_confidences(pred_labels, top_k):
-    confidences = []
-
-    for logits in pred_labels:
-        probs = np.exp(logits) / (np.sum(np.exp(logits)) + 1e-3)
-        top_label = np.amax(probs)
-        confidences.append(top_label)
-
     #top_confidences = sorted(confidences, key=lambda tup: tup[1])[::-1]
 
-    k = min(top_k, len(confidences))
-    top_confidences = np.argpartition(np.asarray(confidences), -k)[-k:]
+    k = min(top_k, len(pred_labels))
+    top_confidences = np.argpartition(pred_labels, -k)[-k:]
 
     return top_confidences
 
@@ -72,9 +64,11 @@ class Matcher:
                     for i in range(layer_boxes[o_i]):
                         self.index2indices.append([o_i, x, y, i])
 
-    def match_boxes(self, pred_labels, anns):
+    def match_boxes(self, pred_labels_amax, pred_labels_argmax, anns):
         matches = [[[[None for i in range(c.layer_boxes[o])] for y in range(c.out_shapes[o][2])] for x in range(c.out_shapes[o][1])]
                  for o in range(len(layer_boxes))]
+
+        #matches = []
 
         positive_count = 0
 
@@ -95,6 +89,7 @@ class Matcher:
                             jacc = calc_jaccard(gt_box, center2cornerbox(box)) #gt_box is corner, box is center-based so convert
                             if jacc >= 0.5:
                                 matches[o][x][y][i] = (gt_box, id)
+                                #matches.append(([o, x, y, i], gt_box, id))
                                 positive_count += 1
                             if jacc > top_match[1]:
                                 top_match = ([o, x, y, i], jacc)
@@ -104,17 +99,18 @@ class Matcher:
             if top_box is not None and matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] is None:
                 positive_count += 1
                 matches[top_box[0]][top_box[1]][top_box[2]][top_box[3]] = (gt_box, id)
+                #matches.append((top_box, gt_box, id))
 
         negative_max = positive_count * negposratio
         negative_count = 0
 
-        confidences = get_top_confidences(pred_labels, negative_max)
+        confidences = get_top_confidences(pred_labels_amax, negative_max)
 
         for i in confidences:
             indices = self.index2indices[i]
 
             # warning: indices switched
-            if matches[indices[0]][indices[1]][indices[2]][indices[3]] is None and np.argmax(pred_labels[i]) != c.classes:
+            if matches[indices[0]][indices[1]][indices[2]][indices[3]] is None and pred_labels_argmax[i] != c.classes:
                 matches[indices[0]][indices[1]][indices[2]][indices[3]] = -1
                 negative_count += 1
 

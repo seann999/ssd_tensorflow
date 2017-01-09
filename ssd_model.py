@@ -23,10 +23,12 @@ class SSD:
         ckpt = tf.train.get_checkpoint_state(model_dir)
 
         def init_model():
-            self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs = model(self.sess)
+            self.imgs_ph, self.bn, self.output_tensors, self.pred_labels, self.pred_locs, self.pred_labels_amax, self.pred_labels_argmax, self.segout\
+                = model(self.sess)
             total_boxes = self.pred_labels.get_shape().as_list()[1]
-            self.positives_ph, self.negatives_ph, self.true_labels_ph, self.true_locs_ph, self.total_loss, self.class_loss, self.loc_loss = \
-                loss(self.pred_labels, self.pred_locs, total_boxes)
+            self.positives_ph, self.negatives_ph, self.true_labels_ph, self.true_locs_ph, self.true_seg_ph,\
+            self.total_loss, self.class_loss, self.loc_loss, self.seg_loss = \
+                loss(self.pred_labels, self.pred_locs, self.segout, total_boxes)
             out_shapes = [out.get_shape().as_list() for out in self.output_tensors]
             c.out_shapes = out_shapes
             c.defaults = default_boxes(out_shapes)
@@ -78,6 +80,7 @@ def model(sess):
          128, 256]
 
     with tf.variable_scope("ssd_extension"):
+        #resized = tf.image.resize_images(images, [vgg.conv5_3.get_shape().as_list()[1], vgg.conv5_3.get_shape().as_list()[2]])tf.concat(3, [vgg.conv5_3, resized])
         c6 = tfc.conv2d("c6", vgg.conv5_3, h[0], h[1], bn, size=3)
         c7 = tfc.conv2d("c7", c6, h[1], h[2], bn, size=1)
 
@@ -92,16 +95,96 @@ def model(sess):
 
         p11 = tf.nn.avg_pool(c10_2, [1, 3, 3, 1], [1, 1, 1, 1], "VALID")
 
-        c_ = c.classes+1
+        c_ = 101#c.classes+1
 
         print("model output classes: %i" % c_)
 
-        out1 = tfc.conv2d("out1", vgg.conv4_3, 512, layer_boxes[0] * (c_ + 4), bn, size=3, act=None)
-        out2 = tfc.conv2d("out2", c7, h[2], layer_boxes[1] * (c_ + 4), bn, size=3, act=None)
-        out3 = tfc.conv2d("out3", c8_2, h[4], layer_boxes[2] * (c_ + 4), bn, size=3, act=None)
-        out4 = tfc.conv2d("out4", c9_2, h[6], layer_boxes[3] * (c_ + 4), bn, size=3, act=None)
-        out5 = tfc.conv2d("out5", c10_2, h[8], layer_boxes[4] * (c_ + 4), bn, size=3, act=None)
-        out6 = tfc.conv2d("out6", p11, h[8], layer_boxes[5] * (c_ + 4), bn, size=1, act=None)
+        topdown = True
+        conv43 = vgg.conv4_3
+
+        if topdown:
+            #uts = [out1, out2, out3, out4, out5, out6]
+
+            bs = FLAGS.batch_size
+            simple = True
+
+            if simple:
+                s = c10_2.get_shape().as_list()
+                dout5 = tfc.deconv2d("dc5", p11, h[8], h[8], bn, tf.pack([bs, s[1], s[2], h[8]]), size=3, pad="VALID")
+                #dout5 = tfc.conv2d("dc5c", dout5, h[8], s[3], bn, size=1)
+                c10_2 = tf.concat(3, [c10_2, dout5])
+
+                s = c9_2.get_shape().as_list()
+                dout4 = tfc.deconv2d("dc4", c10_2, c10_2.get_shape().as_list()[-1], h[7], bn, tf.pack([bs, s[1], s[2], h[7]]), stride=2)
+                #dout4 = tfc.conv2d("dc4c", dout4, h[7], s[3], bn, size=1)
+                c9_2 = tf.concat(3, [c9_2, dout4])
+
+                s = c8_2.get_shape().as_list()
+                dout3 = tfc.deconv2d("dc3", c9_2, c9_2.get_shape().as_list()[-1], h[5], bn, tf.pack([bs, s[1], s[2], h[5]]), stride=2)
+                #dout3 = tfc.conv2d("dc3c", dout3, h[5], s[3], bn, size=1)
+                c8_2 = tf.concat(3, [c8_2, dout3])
+
+                s = c7.get_shape().as_list()
+                dout2 = tfc.deconv2d("dc2", c8_2, c8_2.get_shape().as_list()[-1], h[3], bn, tf.pack([bs, s[1], s[2], h[3]]), stride=2)
+                #dout2 = tfc.conv2d("dc2c", dout2, h[3], s[3], bn, size=1)
+                c7 = tf.concat(3, [c7, dout2])
+
+                s = vgg.conv4_3.get_shape().as_list()
+                dout1 = tfc.deconv2d("dc1", c7, c7.get_shape().as_list()[-1], h[1], bn, tf.pack([bs, s[1], s[2], h[1]]), stride=2)
+                #dout1 = tfc.conv2d("dc1c", dout1, h[1], 512, bn, size=1)
+                conv43 = tf.concat(3, [conv43, dout1])
+            else:
+                s = c10_2.get_shape().as_list()
+                dout5 = tfc.deconv2d("dc5", p11, h[8], h[8], bn, tf.pack([bs, s[1], s[2], h[8]]), size=3, pad="VALID")
+                dout5 = tfc.conv2d("dc5c", dout5, h[8], s[3], bn, size=1)
+                c10_2 = tf.concat(3, [c10_2, dout5])
+
+                s = c9_2.get_shape().as_list()
+                dout4 = tfc.deconv2d("dc4", c10_2, c10_2.get_shape().as_list()[-1], h[6], bn,
+                                     tf.pack([bs, s[1], s[2], h[6]]), stride=2)
+                dout4 = tfc.conv2d("dc4c", dout4, h[6], s[3], bn, size=1)
+                c9_2 = tf.concat(3, [c9_2, dout4])
+
+                s = c8_2.get_shape().as_list()
+                dout3 = tfc.deconv2d("dc3", c9_2, c9_2.get_shape().as_list()[-1], h[4], bn,
+                                     tf.pack([bs, s[1], s[2], h[4]]), stride=2)
+                dout3 = tfc.conv2d("dc3c", dout3, h[4], s[3], bn, size=1)
+                c8_2 = tf.concat(3, [c8_2, dout3])
+
+                s = c7.get_shape().as_list()
+                dout2 = tfc.deconv2d("dc2", c8_2, c8_2.get_shape().as_list()[-1], h[2], bn,
+                                     tf.pack([bs, s[1], s[2], h[2]]), stride=2)
+                dout2 = tfc.conv2d("dc2c", dout2, h[2], s[3], bn, size=1)
+                c7 = tf.concat(3, [c7, dout2])
+
+                s = vgg.conv4_3.get_shape().as_list()
+                dout1 = tfc.deconv2d("dc1", c7, c7.get_shape().as_list()[-1], h[0], bn, tf.pack([bs, s[1], s[2], h[0]]),
+                                     stride=2)
+                dout1 = tfc.conv2d("dc1c", dout1, h[0], 512, bn, size=1)
+                conv43 = tf.concat(3, [conv43, dout1])
+
+            #dout1 = tfc.conv2d("dout1", dout1, 512, layer_boxes[0] * (c_ + 4), bn, size=3, act=None)
+            #dout2 = tfc.conv2d("dout2", dout2, h[2], layer_boxes[1] * (c_ + 4), bn, size=3, act=None)
+            #dout3 = tfc.conv2d("dout3", dout3, h[4], layer_boxes[2] * (c_ + 4), bn, size=3, act=None)
+            #dout4 = tfc.conv2d("dout4", dout4, h[6], layer_boxes[3] * (c_ + 4), bn, size=3, act=None)
+            #dout5 = tfc.conv2d("dout5", dout5, h[8], layer_boxes[4] * (c_ + 4), bn, size=3, act=None)
+
+            #out1 += dout1
+            #out2 += dout2
+            #out3 += dout3
+            #out4 += dout4
+            #out5 += dout5
+            #out5 += dout5
+
+        out1 = tfc.conv2d("out1", conv43, conv43.get_shape().as_list()[-1], layer_boxes[0] * (c_ + 4), bn, size=3, act=None)
+        out2 = tfc.conv2d("out2", c7, c7.get_shape().as_list()[-1], layer_boxes[1] * (c_ + 4), bn, size=3, act=None)
+        out3 = tfc.conv2d("out3", c8_2, c8_2.get_shape().as_list()[-1], layer_boxes[2] * (c_ + 4), bn, size=3, act=None)
+        out4 = tfc.conv2d("out4", c9_2, c9_2.get_shape().as_list()[-1], layer_boxes[3] * (c_ + 4), bn, size=3, act=None)
+        out5 = tfc.conv2d("out5", c10_2, c10_2.get_shape().as_list()[-1], layer_boxes[4] * (c_ + 4), bn, size=3, act=None)
+        out6 = tfc.conv2d("out6", p11, p11.get_shape().as_list()[-1], layer_boxes[5] * (c_ + 4), bn, size=1, act=None)
+
+        s = conv43.get_shape().as_list()
+        seg_out = tfc.deconv2d("seg_out", conv43, conv43.get_shape().as_list()[-1], c_, bn, tf.pack([FLAGS.batch_size, s[1]*2, s[2]*2, c_]), stride=2)
 
     #new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="ssd_extension")
     #sess.run(tf.variables_initializer(new_vars))
@@ -117,9 +200,14 @@ def model(sess):
     formatted_outs = tf.concat(1, outfs) # all (~20000 for MS COCO settings) boxes are now lined up for each image
 
     pred_labels = formatted_outs[:, :, :c_]
+
+    label_prob = tf.nn.softmax(pred_labels)
+    pred_labels_amax = tf.reduce_max(label_prob, reduction_indices=2)
+    pred_labels_arg = tf.argmax(pred_labels, axis=2)
+
     pred_locs = formatted_outs[:, :, c_:]
 
-    return images, bn, outputs, pred_labels, pred_locs
+    return images, bn, outputs, pred_labels, pred_locs, pred_labels_amax, pred_labels_arg, seg_out
 
 def smooth_l1(x):
     l2 = 0.5 * (x**2.0)
@@ -130,11 +218,12 @@ def smooth_l1(x):
 
     return re
 
-def loss(pred_labels, pred_locs, total_boxes):
+def loss(pred_labels, pred_locs, pred_seg, total_boxes):
     positives = tf.placeholder(tf.float32, [None, total_boxes])
     negatives = tf.placeholder(tf.float32, [None, total_boxes])
     true_labels = tf.placeholder(tf.int32, [None, total_boxes])
     true_locs = tf.placeholder(tf.float32, [None, total_boxes, 4])
+    true_seg = tf.placeholder(tf.int32, [None, 76, 76])
 
     posandnegs = positives + negatives
 
@@ -142,9 +231,12 @@ def loss(pred_labels, pred_locs, total_boxes):
     class_loss = tf.reduce_sum(class_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(posandnegs, reduction_indices=1))
     loc_loss = tf.reduce_sum(smooth_l1(pred_locs - true_locs), reduction_indices=2) * positives
     loc_loss = tf.reduce_sum(loc_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(positives, reduction_indices=1))
-    total_loss = tf.reduce_mean(class_loss + 1.0 * loc_loss)
 
-    return positives, negatives, true_labels, true_locs, total_loss, tf.reduce_mean(class_loss), tf.reduce_mean(loc_loss)
+    seg_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(pred_seg, true_seg))
+
+    total_loss = tf.reduce_mean(class_loss + 1.0 * loc_loss + seg_loss)
+
+    return positives, negatives, true_labels, true_locs, true_seg, total_loss, tf.reduce_mean(class_loss), tf.reduce_mean(loc_loss), tf.reduce_mean(seg_loss)
 
 def box_scale(k):
     s_min = c.box_s_min
@@ -198,3 +290,5 @@ def default_boxes(out_shapes):
 
     return boxes
 
+if __name__ == "__main__":
+    SSD("summaries/modeltest")
