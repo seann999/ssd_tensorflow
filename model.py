@@ -42,7 +42,7 @@ def model(sess):
         out6 = tfc.conv2d("out6", p11, h[8], layer_boxes[5] * (c_ + 4), bn, size=1, act=None)
 
     new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="ssd_extension")
-    sess.run(tf.initialize_variables(new_vars))
+    sess.run(tf.variables_initializer(new_vars))
 
     outputs = [out1, out2, out3, out4, out5, out6]
 
@@ -53,7 +53,7 @@ def model(sess):
         outf = tf.reshape(out, [-1, w*h*layer_boxes[i], c_ + 4])
         outfs.append(outf)
 
-    formatted_outs = tf.concat(1, outfs) # all (~20000 for MS COCO settings) boxes are now lined up for each image
+    formatted_outs = tf.concat(outfs, 1) # all (~20000 for MS COCO settings) boxes are now lined up for each image
 
     pred_labels = formatted_outs[:, :, :c_]
     pred_locs = formatted_outs[:, :, c_:]
@@ -65,7 +65,7 @@ def smooth_l1(x):
     l1 = tf.abs(x) - 0.5
 
     condition = tf.less(tf.abs(x), 1.0)
-    re = tf.select(condition, l2, l1)
+    re = tf.where(condition, l2, l1)
 
     return re
 
@@ -77,7 +77,7 @@ def loss(pred_labels, pred_locs, total_boxes):
 
     posandnegs = positives + negatives
 
-    class_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(pred_labels, true_labels) * posandnegs
+    class_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred_labels, labels=true_labels) * posandnegs
     class_loss = tf.reduce_sum(class_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(posandnegs, reduction_indices=1))
     loc_loss = tf.reduce_sum(smooth_l1(pred_locs - true_locs), reduction_indices=2) * positives
     loc_loss = tf.reduce_sum(loc_loss, reduction_indices=1) / (1e-5 + tf.reduce_sum(positives, reduction_indices=1))

@@ -44,7 +44,7 @@ class SSD:
 
             self.optimizer = tf.train.AdamOptimizer(1e-3).minimize(self.total_loss, global_step=self.global_step)
         new_vars = tf.get_collection(tf.GraphKeys.VARIABLES, scope="optimizer")
-        self.sess.run(tf.initialize_variables(new_vars))
+        self.sess.run(tf.variables_initializer(new_vars))
 
         if model_dir is None:
             model_dir = FLAGS.model_dir
@@ -244,7 +244,7 @@ def start_train():
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    summary_writer = tf.train.SummaryWriter(FLAGS.model_dir)
+    summary_writer = tf.summary.FileWriter(FLAGS.model_dir)
     box_matcher = Matcher()
 
     train_loader = coco.Loader(True)
